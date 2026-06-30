@@ -6,7 +6,26 @@ from gas_forecast.data.cache import (
     write_parquet_cache,
 )
 from gas_forecast.data.export import save_versioned_parquet
-from gas_forecast.data.features import join_weather_storage
+from gas_forecast.data.features import (
+    BASE_MODEL_COLUMNS,
+    CALENDAR_FEATURE_COLUMNS,
+    DEFAULT_WEATHER_MODEL_FEATURES,
+    ENGINEERED_FEATURE_COLUMNS,
+    STORAGE_FEATURE_COLUMNS,
+    TARGET_COLUMN,
+    WEATHER_FEATURE_COLUMNS,
+    add_calendar_features,
+    add_storage_features,
+    add_weather_features,
+    build_weekly_model_features,
+    join_weather_storage,
+    validate_weekly_model_features,
+)
+from gas_forecast.data.paths import (
+    DEFAULT_PROCESSED_DIR,
+    latest_processed_path,
+    weather_cache_dir,
+)
 from gas_forecast.data.regions import region_slug, region_states, supported_storage_regions
 from gas_forecast.data.storage import (
     calculate_weekly_storage_change,
@@ -43,7 +62,20 @@ __all__ = [
     "fetch_all_state_temperatures",
     "fetch_weekly_storage_incremental",
     "fetch_weekly_storage_raw",
+    "BASE_MODEL_COLUMNS",
+    "CALENDAR_FEATURE_COLUMNS",
+    "DEFAULT_PROCESSED_DIR",
+    "DEFAULT_WEATHER_MODEL_FEATURES",
+    "ENGINEERED_FEATURE_COLUMNS",
+    "STORAGE_FEATURE_COLUMNS",
+    "TARGET_COLUMN",
+    "WEATHER_FEATURE_COLUMNS",
+    "add_calendar_features",
+    "add_storage_features",
+    "add_weather_features",
+    "build_weekly_model_features",
     "join_weather_storage",
+    "latest_processed_path",
     "load_census_state_locations",
     "load_parquet_cache",
     "merge_timeseries",
@@ -58,6 +90,8 @@ __all__ = [
     "supported_storage_regions",
     "validate_state_daily_weather",
     "validate_weather_locations",
+    "validate_weekly_model_features",
     "validate_weekly_weather",
+    "weather_cache_dir",
     "write_parquet_cache",
 ]

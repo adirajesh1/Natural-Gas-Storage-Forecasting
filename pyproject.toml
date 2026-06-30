@@ -16,5 +16,8 @@ dependencies = [
     "statsmodels",
 ]
 
+[project.scripts]
+gas-data = "gas_forecast.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
