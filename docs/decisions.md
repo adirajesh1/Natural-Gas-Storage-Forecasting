@@ -1,5 +1,52 @@
 # Decision Log
 
+## 2026-06-30 - Add analytical feature and model benchmarks
+
+### Decision
+
+Add richer engineered features for model experiments: rolling HDD/CDD, rolling storage changes, storage versus last year, storage versus trailing same-week average, and gas-season flags. Expand sklearn model configs with Ridge, ElasticNet, Random Forest, HistGradientBoosting, and quantile HistGradientBoosting variants.
+
+### Reason
+
+These features and models improve analytical value without adding new dependencies or heavy experiment infrastructure. They give the project nonlinear benchmarks, regularized linear baselines, and early support for uncertainty-oriented quantile forecasts.
+
+### Alternatives considered
+
+- Add external boosting libraries.
+- Add neural networks.
+- Keep only seasonal linear and SARIMA models.
+
+### Tradeoff
+
+The feature table has more columns and early rows have more missing lag/rolling values, but the trainer already drops rows missing selected features before fitting.
+
+### Revisit when
+
+If recursive forecasting or production-style feature availability becomes a goal.
+
+## 2026-06-30 - Centralize model experiment configuration
+
+### Decision
+
+Add shared model configuration in `gas_forecast.modeling.config` and update model notebooks to build models from named configs instead of hard-coded constructors.
+
+### Reason
+
+The project now has both legacy forecast model classes and sklearn-style backtests. Centralized configs make it easier to compare models consistently across notebooks and change default lookback windows, Fourier harmonics, feature columns, or sklearn estimators in one place.
+
+### Alternatives considered
+
+- Keep model definitions embedded in each notebook.
+- Add a heavier external config framework.
+
+### Tradeoff
+
+The config module is another layer to learn, but it keeps model experimentation explicit and still lightweight.
+
+### Revisit when
+
+If experiments become numerous enough to need persisted run metadata or hyperparameter sweeps.
+
 ## 2026-06-30 - Add sklearn-style modeling infrastructure
 
 ### Decision

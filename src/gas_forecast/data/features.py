@@ -45,19 +45,37 @@ WEATHER_FEATURE_COLUMNS = (
     "hdd_lag4",
     "cdd_lag1",
     "cdd_lag4",
+    "hdd_rolling_4wk",
+    "hdd_rolling_8wk",
+    "cdd_rolling_4wk",
+    "cdd_rolling_8wk",
+    "hdd_vs_4wk_avg",
+    "cdd_vs_4wk_avg",
 )
 
 STORAGE_FEATURE_COLUMNS = (
     "weekly_change_lag1",
     "weekly_change_lag4",
+    "weekly_change_rolling_4wk",
+    "weekly_change_rolling_8wk",
     "storage_bcf_lag52",
+    "storage_vs_last_year",
+    "storage_5yr_avg",
+    "storage_vs_5yr_avg",
     "weekly_change_yoy",
+)
+
+SEASON_FEATURE_COLUMNS = (
+    "is_injection_season",
+    "is_withdrawal_season",
+    "is_shoulder_month",
 )
 
 ENGINEERED_FEATURE_COLUMNS = (
     CALENDAR_FEATURE_COLUMNS
     + WEATHER_FEATURE_COLUMNS
     + STORAGE_FEATURE_COLUMNS
+    + SEASON_FEATURE_COLUMNS
 )
 
 DEFAULT_WEATHER_MODEL_FEATURES = (
@@ -65,7 +83,13 @@ DEFAULT_WEATHER_MODEL_FEATURES = (
     "hdd",
     "cdd",
     "hdd_lag1",
+    "hdd_rolling_4wk",
+    "cdd_rolling_4wk",
     "weekly_change_lag1",
+    "weekly_change_rolling_4wk",
+    "storage_vs_5yr_avg",
+    "storage_vs_last_year",
+    "is_injection_season",
 )
 
 
@@ -80,6 +104,40 @@ def _lag_within_region(
     if group_col in frame.columns:
         return frame.groupby(group_col, group_keys=False)[column].shift(lag)
     return frame[column].shift(lag)
+
+
+def _rolling_mean_within_region(
+    frame: pd.DataFrame,
+    column: str,
+    window: int,
+    *,
+    group_col: str = "duoarea",
+) -> pd.Series:
+    """Trailing rolling mean using only prior rows within each region."""
+    shifted = _lag_within_region(frame, column, 1, group_col=group_col)
+    if group_col in frame.columns:
+        return shifted.groupby(frame[group_col], group_keys=False).rolling(
+            window=window,
+            min_periods=window,
+        ).mean().reset_index(level=0, drop=True)
+    return shifted.rolling(window=window, min_periods=window).mean()
+
+
+def _same_week_history_mean(
+    frame: pd.DataFrame,
+    column: str,
+    *,
+    years: int = 5,
+    group_col: str = "duoarea",
+) -> pd.Series:
+    """Mean of prior same-week observations within each region."""
+    if group_col in frame.columns:
+        return frame.groupby([group_col, "week_of_year"], group_keys=False)[
+            column
+        ].transform(lambda values: values.shift(1).rolling(years, min_periods=1).mean())
+    return frame.groupby("week_of_year")[column].transform(
+        lambda values: values.shift(1).rolling(years, min_periods=1).mean()
+    )
 
 
 def join_weather_storage(
@@ -109,7 +167,7 @@ def join_weather_storage(
 
 
 def add_calendar_features(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add cyclical week-of-year and month encodings."""
+    """Add cyclical calendar encodings and gas-season flags."""
     df = frame.copy()
     dates = pd.to_datetime(df["date"])
     week_angle = 2 * np.pi * df["week_of_year"] / 52.0
@@ -118,6 +176,9 @@ def add_calendar_features(frame: pd.DataFrame) -> pd.DataFrame:
     df["week_cos"] = np.cos(week_angle)
     df["month_sin"] = np.sin(month_angle)
     df["month_cos"] = np.cos(month_angle)
+    df["is_injection_season"] = dates.dt.month.between(4, 10).astype(int)
+    df["is_withdrawal_season"] = dates.dt.month.isin([11, 12, 1, 2, 3]).astype(int)
+    df["is_shoulder_month"] = dates.dt.month.isin([4, 5, 9, 10]).astype(int)
     return df
 
 
@@ -134,6 +195,17 @@ def add_weather_features(
     for lag in lag_weeks:
         df[f"hdd_lag{lag}"] = _lag_within_region(df, "hdd", lag)
         df[f"cdd_lag{lag}"] = _lag_within_region(df, "cdd", lag)
+
+    for window in (4, 8):
+        df[f"hdd_rolling_{window}wk"] = _rolling_mean_within_region(
+            df, "hdd", window
+        )
+        df[f"cdd_rolling_{window}wk"] = _rolling_mean_within_region(
+            df, "cdd", window
+        )
+
+    df["hdd_vs_4wk_avg"] = df["hdd"] - df["hdd_rolling_4wk"]
+    df["cdd_vs_4wk_avg"] = df["cdd"] - df["cdd_rolling_4wk"]
 
     return df
 
@@ -152,7 +224,15 @@ def add_storage_features(
             df, TARGET_COLUMN, lag
         )
 
+    for window in (4, 8):
+        df[f"weekly_change_rolling_{window}wk"] = _rolling_mean_within_region(
+            df, TARGET_COLUMN, window
+        )
+
     df["storage_bcf_lag52"] = _lag_within_region(df, "storage_bcf", yoy_lag)
+    df["storage_vs_last_year"] = df["storage_bcf"] - df["storage_bcf_lag52"]
+    df["storage_5yr_avg"] = _same_week_history_mean(df, "storage_bcf", years=5)
+    df["storage_vs_5yr_avg"] = df["storage_bcf"] - df["storage_5yr_avg"]
     df["weekly_change_yoy"] = df[TARGET_COLUMN] - _lag_within_region(
         df, TARGET_COLUMN, yoy_lag
     )
