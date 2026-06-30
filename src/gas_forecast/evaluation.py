@@ -14,11 +14,12 @@ def evaluate_forecast(
     if year is None:
         year = storage["year"].max()
 
+    training_storage = storage.loc[storage["year"] <= year].copy()
     actuals = storage.loc[
         storage["year"] == year, ["date", "week_of_year", "weekly_change_bcf"]
     ].copy()
 
-    model.fit(storage)
+    model.fit(training_storage)
     preds = model.predict(actuals)
 
     result = actuals.copy()

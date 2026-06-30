@@ -19,5 +19,14 @@ dependencies = [
 [project.scripts]
 gas-data = "gas_forecast.cli:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

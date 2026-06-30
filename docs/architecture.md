@@ -1,254 +1,218 @@
 # Project Architecture
 
-## Purpose of this document
+## Purpose
 
-This document describes how the codebase is organized, what each major module is responsible for, and how data moves through the system.
+This document describes how the Gas Market Platform codebase is organized, where major responsibilities live, and how data moves from external sources into model-ready datasets.
 
-It should be updated when:
+Update this document when:
 
-- a new major module is created;
+- a major module is added, removed, or renamed;
+- a workflow entry point changes;
 - responsibility moves between modules;
-- the main execution flow changes;
-- a new external system or data source is introduced.
+- a new external data source or generated artifact type is introduced.
 
-## High-level architecture
-
-The intended architecture separates the project into four stages:
+## High-level flow
 
 ```text
-1. Data collection
+External sources
+  EIA weekly storage API
+  Open-Meteo archive API
+  Census state population centroids
         |
         v
-2. Data cleaning and validation
+Raw incremental cache
+  datasets/cache/storage/
+  datasets/cache/weather/by_state/
         |
         v
-3. Feature engineering
+Processed parquet exports
+  datasets/processed/
         |
         v
-4. Modeling and evaluation
+Model feature table
+  weekly storage + population-weighted weekly weather + engineered lags
+        |
+        v
+Forecast models, evaluation, and plots
 ```
 
+The code is packaged under `src/gas_forecast` so notebooks and command-line workflows can share the same implementation.
 
-
-## Current execution flow
-
-### Storage (01a)
+## Repository layout
 
 ```text
-REGION config
-        |
-        v
-fetch_weekly_storage_incremental (datasets/cache/storage/)
-        |
-        v
-clean → select_region → calculate change → export processed parquet
+src/gas_forecast/        Reusable package code
+notebooks/               Exploratory and narrative analysis
+datasets/                Local generated data, ignored by git
+plots/                   Generated visual artifacts
+docs/                    Architecture notes and decision records
+dashboard/               Reserved for an app/dashboard layer
+db/                      Reserved for persistent database work
+models/                  Reserved for trained model artifacts
 ```
 
-### Weather (01b)
+The empty top-level `dashboard`, `db`, and `models` directories are placeholders. If they remain unused, either document their intended ownership or remove them to reduce ambiguity.
 
-```text
-REGION config + storage date range
-        |
-        v
-load census → select_weather_locations
-        |
-        v
-fetch_all_state_temperatures incremental (datasets/cache/weather/by_state/)
-        |
-        v
-HDD/CDD → aggregate daily → aggregate to storage weeks → export processed parquet
-```
+## Package modules
 
-### Raw cache layout
-
-```text
-datasets/cache/
-  storage/weekly_storage_raw.parquet
-  weather/by_state/{State}.parquet
-```
-
-The known weather-data flow is:
-
-```text
-Requested date range and region
-        |
-        v
-Split range into calendar-year periods
-        |
-        v
-Build Open-Meteo API requests
-        |
-        v
-Send HTTP requests
-        |
-        v
-Parse API responses
-        |
-        v
-Store or cache downloaded weather data
-        |
-        v
-Combine downloaded periods
-        |
-        v
-Return weather data for later processing
-```
-
-
-
-## Known modules
-
-
-
-### Weather downloader
-
-Path: src/data/weather.py
-
-Purpose:
-
-> Download historical weather data from Open-Meteo in smaller, manageable request periods.
-
-Known dependencies:
-
-- `pandas`: date handling and tabular data;
-- `requests`: HTTP requests;
-- `pathlib.Path`: filesystem paths;
-- `hashlib`: likely generation of stable cache identifiers;
-- `time`: likely delays between retries or requests.
-
-Known external system:
-
-- Open-Meteo Archive API
-
-API endpoint:
-
-```text
-https://archive-api.open-meteo.com/v1/archive
-```
-
-Known responsibilities:
-
-- accept a requested historical date range;
-- divide that range into yearly periods;
-- make API requests;
-- possibly cache API results;
-- possibly retry failed requests;
-- return or save weather observations.
-
-Responsibilities that should remain outside this module:
-
-- calculating HDD and CDD;
-- aggregating weather into gas weeks;
-- combining weather with EIA storage data;
-- fitting forecasting models;
-- evaluating forecast accuracy.
-
-
-
-#### `_date_periods`
-
-Purpose:
-
-> Split an inclusive date range into calendar-year request periods.
-
-Inputs:
-
-- `start_date`: beginning of the full requested period;
-- `end_date`: end of the full requested period;
-- `freq`: currently supports yearly periods through `"YS"`.
-
-Output:
-
-```python
-list[tuple[str, str]]
-```
-
-Each tuple contains an inclusive start and end date.
-
-Example:
-
-```python
-_date_periods("2024-06-01", "2025-02-01")
-```
-
-Expected conceptual output:
-
-```python
-[
-    ("2024-06-01", "2024-12-31"),
-    ("2025-01-01", "2025-02-01"),
-]
-```
-
-Important behavior:
-
-- partial first and final years are preserved;
-- intermediate years cover January 1 through December 31;
-- unsupported frequencies raise a `ValueError`.
-
-Reason for existence:
-
-Long weather histories are easier to retry, cache, inspect, and resume when divided into smaller requests.
-
-## Module inventory
-
-This table will be populated after reviewing the folder tree.
-
-
-| Module                | Purpose                     | Inputs                      | Outputs                     | Called by |
-| --------------------- | --------------------------- | --------------------------- | --------------------------- | --------- |
-| `TODO weather module` | Download historical weather | Dates, locations, variables | Daily weather data or files | `TODO`    |
-| `TODO EIA module`     | Download storage data       | EIA request parameters      | Weekly storage records      | `TODO`    |
-| `TODO feature module` | Create model features       | Clean source datasets       | Weekly feature table        | `TODO`    |
-| `TODO model module`   | Train and evaluate model    | Weekly feature table        | Predictions and metrics     | `TODO`    |
-
-
-
+| Module | Responsibility |
+| --- | --- |
+| `gas_forecast.cli` | Command-line entry point for data refresh workflows. |
+| `gas_forecast.pipelines.data` | Orchestrates storage, weather, and feature pipelines. |
+| `gas_forecast.data.cache` | Shared parquet cache loading, atomic writing, time-series merging, and date-gap detection. |
+| `gas_forecast.data.paths` | Canonical local paths for cache and processed artifacts. |
+| `gas_forecast.data.regions` | EIA storage-region definitions, state membership, and filesystem-safe slugs. |
+| `gas_forecast.data.storage` | Compatibility facade that keeps older storage imports working. |
+| `gas_forecast.data.storage_api` | EIA storage API access, pagination, and raw incremental cache refresh. |
+| `gas_forecast.data.storage_transforms` | Storage cleaning, region selection, weekly change calculation, and model-data formatting. |
+| `gas_forecast.data.storage_validation` | Storage dataframe validators. |
+| `gas_forecast.data.weather` | Compatibility facade that keeps older weather imports working. |
+| `gas_forecast.data.weather_api` | Open-Meteo request/response handling and legacy chunk cache paths. |
+| `gas_forecast.data.weather_cache` | Incremental per-state weather cache behavior and legacy cache migration. |
+| `gas_forecast.data.weather_locations` | Census state centroid loading and region-specific location selection. |
+| `gas_forecast.data.weather_features` | HDD/CDD calculation, population-weighted aggregation, and storage-week alignment. |
+| `gas_forecast.data.weather_validation` | Weather/location dataframe validators. |
+| `gas_forecast.data.features` | Joins weekly storage/weather data and builds model-ready calendar, weather, and storage lag features. |
+| `gas_forecast.data.export` | Versioned parquet export with optional latest-file aliases. |
+| `gas_forecast.models` | Forecast model interface and implementations. |
+| `gas_forecast.evaluation` | Fits models for an evaluation year and returns forecast diagnostics. |
+| `gas_forecast.plotting` | Standard Plotly forecast visualizations. |
 
 ## Entry points
 
-An entry point is a file or function that starts a meaningful workflow.
+### CLI
 
-Current entry points:
+The installable script is defined in `pyproject.toml`:
 
+```text
+gas-data = gas_forecast.cli:main
+```
 
-| Entry point | Workflow started            | Status               |
-| ----------- | --------------------------- | -------------------- |
-| `TODO`      | Download historical weather | Needs identification |
-| `TODO`      | Download EIA storage data   | Needs identification |
-| `TODO`      | Build features              | May not exist yet    |
-| `TODO`      | Train model                 | May not exist yet    |
+Current command:
 
+```text
+gas-data refresh --region R48
+gas-data refresh --all-regions
+```
 
+Optional flags control stage selection, cache directories, processed output directories, storage revision windows, Open-Meteo request pacing, and legacy weather-cache migration.
 
+### Python API
 
-## Shared configuration
+The main callable workflows live in `gas_forecast.pipelines.data`:
 
-The following items need to be located and documented:
+| Function | Purpose |
+| --- | --- |
+| `run_storage_pipeline` | Download/cache EIA storage, clean one region, calculate weekly change, export processed storage. |
+| `run_weather_pipeline` | Load storage date range, download/cache state weather, aggregate daily and weekly weather, export processed weather. |
+| `run_features_pipeline` | Join storage and weekly weather, build engineered model features, export feature table. |
+| `run_data_pipeline` | Run one or more stages for one region. |
+| `run_all_regions` | Run the selected stages for every supported region. |
 
-- [ ] requested historical date range;
-- [ ] weather locations;
-- [ ] weather variables;
-- [ ] raw data directory;
-- [ ] processed data directory;
-- [ ] API keys;
-- [ ] request timeouts;
-- [ ] retry limits;
-- [ ] cache settings;
-- [ ] logging settings;
-- [ ] model parameters.
+### Notebooks
 
+Notebooks are best treated as analysis consumers of package code. They can call lower-level functions while exploring, but stable workflows should eventually call the pipeline functions so notebook behavior does not drift from CLI behavior.
 
+## Data artifacts
 
-## Open architecture questions
+### Raw incremental cache
 
-- Where does the user currently start the weather download?
-- Is there one pipeline script or several separate scripts?
-- Does the weather downloader save raw API responses or processed tables?
-- How is the cache key generated?
-- Can an interrupted download resume without repeating completed requests?
-- Where are weather locations defined?
-- Where will HDD and CDD calculations live?
-- Is the project installed as a Python package?
-- Are notebooks calling reusable functions from the package?
+```text
+datasets/cache/
+  storage/
+    weekly_storage_raw.parquet
+  weather/
+    by_state/
+      Alabama.parquet
+      ...
+```
 
+Storage cache behavior:
+
+- first run backfills available history;
+- later runs re-fetch a configurable recent tail window to capture EIA revisions;
+- cache rows are merged and deduplicated by region, period, and series.
+
+Weather cache behavior:
+
+- one parquet file per state;
+- requested ranges are compared against cached date coverage;
+- only missing prefix/suffix gaps are fetched;
+- large gaps are split into API-friendly request periods.
+
+### Processed exports
+
+Processed files are written to `datasets/processed` with timestamped names and latest aliases:
+
+```text
+{region_slug}_{dataset}_{timestamp}.parquet
+{region_slug}_{dataset}_latest.parquet
+```
+
+Examples:
+
+```text
+lower48_weekly_storage_latest.parquet
+lower48_weekly_weather_latest.parquet
+lower48_weekly_model_features_latest.parquet
+```
+
+Use `weekly_model_features` as the canonical feature-table dataset name. Older `weekly_features` files may exist from previous iterations and should be treated as legacy artifacts.
+
+## Modeling architecture
+
+All forecast models implement `WeeklyChangeForecastModel`:
+
+```text
+fit(storage) -> model
+predict(evaluation) -> predictions
+```
+
+Current implementations:
+
+- `FiveYearWeeklyAverageModel`
+- `WeeklyChangeLinearRegressionModel`
+- `WeeklyChangeFourierRegressionModel`
+- `WeeklyChangeSARIMAModel`
+
+`evaluate_forecast` selects the requested evaluation year, fits the model using data no later than that year, and attaches predictions, deviations, and optional band/outside-band diagnostics.
+
+## Testing
+
+The test suite lives under `tests/` and is configured in `pyproject.toml`.
+
+Current test focus:
+
+- cache date-gap detection;
+- storage-week Friday alignment;
+- incomplete weather-week dropping;
+- grouped storage change calculation;
+- feature lags that do not leak across regions;
+- evaluation-year handling that excludes future years.
+
+Run tests with:
+
+```text
+python -m pytest
+```
+
+Install test dependencies with:
+
+```text
+python -m pip install -e ".[dev]"
+```
+
+## Design conventions
+
+- Keep reusable behavior in `src/gas_forecast`, not notebooks.
+- Keep generated parquet artifacts out of git.
+- Validate data at workflow boundaries.
+- Group time-series operations by `duoarea` when multiple regions may be present.
+- Treat EIA storage week dates as Friday week-ending dates.
+- Prefer pipeline functions for repeatable refreshes.
+- Record non-obvious design choices in `docs/decisions.md`.
+
+## Known improvement areas
+
+- Notebook orchestration should keep moving toward pipeline calls.
+- Placeholder top-level folders should either gain documented ownership or be removed.
