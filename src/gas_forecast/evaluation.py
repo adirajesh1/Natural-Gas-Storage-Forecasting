@@ -1,7 +1,8 @@
 import pandas as pd
+import numpy as np
 
 from gas_forecast.models.base import WeeklyChangeForecastModel
-
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 def evaluate_forecast(
     storage: pd.DataFrame,
@@ -37,3 +38,10 @@ def evaluate_forecast(
         result["outside_band"] = False
 
     return result
+
+def error_metrics(forecast: pd.DataFrame) -> pd.DataFrame:
+    """Calculate error metrics for a forecast."""
+    mae = mean_absolute_error(forecast["weekly_change_bcf"], forecast["predicted_weekly_change"])
+    rmse = np.sqrt(mean_squared_error(forecast["weekly_change_bcf"], forecast["predicted_weekly_change"]))
+    r2 = r2_score(forecast["weekly_change_bcf"], forecast["predicted_weekly_change"])
+    return pd.DataFrame({"Model": [mae, rmse, r2]}, index=["MAE", "RMSE", "R2"])

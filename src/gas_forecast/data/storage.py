@@ -208,6 +208,7 @@ def _finalize_storage_cache(
     result = df.copy()
     result["period"] = pd.to_datetime(result["period"])
     result = result[result["period"] >= pd.to_datetime(min_start_date)]
+    result = result.drop_duplicates(subset=STORAGE_MERGE_KEY_COLS, keep="last")
     return result.sort_values(STORAGE_MERGE_KEY_COLS).reset_index(drop=True)
 
 
@@ -227,6 +228,13 @@ def clean_weekly_storage(raw_df, start_date=None, end_date=None):
     df["year"] = df["period"].dt.year
     df["month"] = df["period"].dt.month
     df["week_of_year"] = df["period"].dt.isocalendar().week.astype(int)
+
+    dedupe_cols = (
+        ["duoarea", "period", "series"]
+        if "series" in df.columns
+        else ["duoarea", "period"]
+    )
+    df = df.drop_duplicates(subset=dedupe_cols, keep="last")
 
     df = df.sort_values(["duoarea", "period"]).reset_index(drop=True)
 
@@ -304,8 +312,9 @@ def validate_weekly_storage(storage: pd.DataFrame) -> None:
 
 
 def validate_storage_region(df: pd.DataFrame) -> None:
-    if df["period"].duplicated().any():
-        raise ValueError("Selected region has duplicate periods.")
+    for _, group in df.groupby("duoarea"):
+        if group["period"].duplicated().any():
+            raise ValueError("Selected region has duplicate periods.")
 
-    if not df["period"].is_monotonic_increasing:
-        raise ValueError("Selected region is not sorted by period.")
+        if not group["period"].is_monotonic_increasing:
+            raise ValueError("Selected region is not sorted by period.")

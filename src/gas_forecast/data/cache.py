@@ -37,12 +37,14 @@ def merge_timeseries(
         merged = existing.copy()
     else:
         merged = pd.concat([existing, new], ignore_index=True)
-        merged = merged.drop_duplicates(subset=key_cols, keep=keep)
 
     if merged.empty:
         return merged
 
+    merged = merged.copy()
     merged[date_col] = pd.to_datetime(merged[date_col])
+    merged = merged.drop_duplicates(subset=key_cols, keep=keep)
+
     sort_cols = list(dict.fromkeys(key_cols + [date_col]))
     return merged.sort_values(sort_cols).reset_index(drop=True)
 
