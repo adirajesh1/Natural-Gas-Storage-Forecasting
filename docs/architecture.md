@@ -28,16 +28,49 @@ The intended architecture separates the project into four stages:
 4. Modeling and evaluation
 ```
 
-The code should avoid mixing these stages unnecessarily. For example, an API downloader should retrieve and save data, but it should not also fit a forecasting model.
+
 
 ## Current execution flow
 
-The complete execution flow is still being documented.
+### Storage (01a)
+
+```text
+REGION config
+        |
+        v
+fetch_weekly_storage_incremental (data/cache/storage/)
+        |
+        v
+clean → select_region → calculate change → export processed parquet
+```
+
+### Weather (01b)
+
+```text
+REGION config + storage date range
+        |
+        v
+load census → select_weather_locations
+        |
+        v
+fetch_all_state_temperatures incremental (data/cache/weather/by_state/)
+        |
+        v
+HDD/CDD → aggregate → export processed parquet
+```
+
+### Raw cache layout
+
+```text
+data/cache/
+  storage/weekly_storage_raw.parquet
+  weather/by_state/{State}.parquet
+```
 
 The known weather-data flow is:
 
 ```text
-Requested date range and locations
+Requested date range and region
         |
         v
 Split range into calendar-year periods
