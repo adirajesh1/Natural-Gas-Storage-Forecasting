@@ -1,5 +1,28 @@
 # Decision Log
 
+## 2026-06-30 - Add sklearn-style modeling infrastructure
+
+### Decision
+
+Add `gas_forecast.modeling` with reusable validation splitters, a generic sklearn-style backtest runner, and simple forecast metrics.
+
+### Reason
+
+The project needs a training layer that works for current notebook graphs and future sklearn-compatible models without baking validation strategy, feature engineering, or model type into the training loop.
+
+### Alternatives considered
+
+- Continue adding one custom wrapper class per model.
+- Add heavier experiment infrastructure such as MLflow, Optuna, or config frameworks.
+
+### Tradeoff
+
+The trainer is intentionally lightweight and assumes features are already built. Recursive multi-step forecasting remains a separate future problem.
+
+### Revisit when
+
+When recursive forecasting or model tuning becomes a priority.
+
 ## 2026-06-30 - Split broad storage and weather modules
 
 ### Decision

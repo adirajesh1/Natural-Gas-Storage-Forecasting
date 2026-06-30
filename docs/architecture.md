@@ -75,6 +75,7 @@ The empty top-level `dashboard`, `db`, and `models` directories are placeholders
 | `gas_forecast.data.features` | Joins weekly storage/weather data and builds model-ready calendar, weather, and storage lag features. |
 | `gas_forecast.data.export` | Versioned parquet export with optional latest-file aliases. |
 | `gas_forecast.models` | Forecast model interface and implementations. |
+| `gas_forecast.modeling` | Scikit-learn-style splitters, backtest runner, and reusable metrics for model experiments. |
 | `gas_forecast.evaluation` | Fits models for an evaluation year and returns forecast diagnostics. |
 | `gas_forecast.plotting` | Standard Plotly forecast visualizations. |
 
@@ -161,7 +162,7 @@ Use `weekly_model_features` as the canonical feature-table dataset name. Older `
 
 ## Modeling architecture
 
-All forecast models implement `WeeklyChangeForecastModel`:
+The original forecast model classes implement `WeeklyChangeForecastModel`:
 
 ```text
 fit(storage) -> model
@@ -177,6 +178,8 @@ Current implementations:
 
 `evaluate_forecast` selects the requested evaluation year, fits the model using data no later than that year, and attaches predictions, deviations, and optional band/outside-band diagnostics.
 
+The newer `gas_forecast.modeling` package is the preferred path for sklearn-style experiments. It expects prebuilt feature rows, uses splitter objects for holdout or rolling backtests, clones and fits any sklearn-compatible estimator per fold, and returns prediction/metric tables that notebooks can graph.
+
 ## Testing
 
 The test suite lives under `tests/` and is configured in `pyproject.toml`.
@@ -189,6 +192,7 @@ Current test focus:
 - grouped storage change calculation;
 - feature lags that do not leak across regions;
 - evaluation-year handling that excludes future years.
+- modeling splitters and sklearn-style backtest behavior.
 
 Run tests with:
 
