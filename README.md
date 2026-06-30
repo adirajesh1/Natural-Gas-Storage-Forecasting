@@ -190,7 +190,3 @@ In this run, the simple linear model performs best. That is a useful modeling re
 - The model does not yet include production, LNG exports, pipeline flows, power burn, or Henry Hub prices.
 - Recursive multi-step forecasting is intentionally not implemented yet.
 - Weekly data gives a relatively small sample size, so simple baselines remain important.
-
-## AI-Assisted Development Note
-
-This project was developed with AI assistance for scaffolding, refactoring, testing, and documentation. The project direction, data sources, modeling goal, validation approach, and final review decisions remain intentionally explainable and inspectable.
