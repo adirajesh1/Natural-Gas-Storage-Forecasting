@@ -180,6 +180,12 @@ oil-data forecast
 oil-data backtest --initial-train-weeks 156
 ```
 
+Launch the multipage Streamlit dashboard (Gas, Power, and Oil):
+
+```bash
+python -m streamlit run dashboard/Gas_Fundamentals.py
+```
+
 Select a materialized weather scenario from a parquet archive:
 
 ```bash

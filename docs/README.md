@@ -26,7 +26,12 @@ Below is a summary of the available documentation files in this directory:
 *   **Purpose**: Details the ERCOT system-wide hourly power-fundamentals MVP, outlining the data contract, 168-hour physical stack identities, heat-rate based implied gas-burn scenario calculations, and CLI commands.
 *   **When to read**: When working with the `power_forecast` package, adding weather/price scenarios, or modifying the Streamlit dashboard fundamentals view.
 
-### 5. [Decision Log](decisions.md)
+### 5. [Oil Fundamentals MVP](oil_fundamentals.md)
+*   **Filename**: `oil_fundamentals.md`
+*   **Purpose**: Documents the U.S. weekly crude balance, component forecasts, inventory-change backtest, CLI commands, and timing limitations.
+*   **When to read**: When working with `oil_forecast`, interpreting the oil dashboard, or changing the EIA weekly-series contract.
+
+### 6. [Decision Log](decisions.md)
 *   **Filename**: `decisions.md`
 *   **Purpose**: A chronological record of key design and architecture decisions, their justifications, alternatives considered, tradeoffs, and revisit conditions.
 *   **When to read**: To understand *why* certain structural patterns (e.g. splitting weather downloads, adding explicit vintages, implementing conformal intervals) were adopted.
