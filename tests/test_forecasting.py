@@ -6,7 +6,7 @@ from sklearn.linear_model import LinearRegression
 
 from gas_forecast.modeling import RecursiveForecaster, run_recursive_backtest
 from gas_forecast.modeling.splitters import ExpandingWindowSplitter
-from gas_forecast.data.features import DEFAULT_WEATHER_MODEL_FEATURES
+from gas_forecast.data.features import DEFAULT_WEATHER_MODEL_FEATURES, add_storage_features
 
 
 class HddRegressor(BaseEstimator, RegressorMixin):
@@ -25,6 +25,14 @@ class StorageDifferenceRegressor(BaseEstimator, RegressorMixin):
 
     def predict(self, X):
         return X["storage_vs_last_year"].to_numpy()
+
+
+class StorageAverageDifferenceRegressor(BaseEstimator, RegressorMixin):
+    def fit(self, X, y):
+        return self
+
+    def predict(self, X):
+        return X["storage_vs_5yr_avg"].to_numpy()
 
 def _create_mock_features() -> pd.DataFrame:
     # Build 100 weeks of mock data
@@ -89,14 +97,25 @@ def test_recursive_forecaster():
     res = forecaster.predict_horizon(df, start_date=start_date, horizon_weeks=4)
     
     assert len(res) == 4
-    assert list(res.columns) == [
+    assert {
         "date",
+        "forecast_origin",
+        "region",
+        "horizon",
+        "model_key",
+        "reconciliation_method",
+        "weather_provider",
+        "weather_run",
+        "p10",
+        "p50",
+        "p90",
         "predicted_weekly_change",
         "projected_storage",
         "actual_weekly_change",
         "actual_storage",
-        "week_of_year"
-    ]
+        "week_of_year",
+    }.issubset(res.columns)
+    assert res["horizon"].tolist() == [1, 2, 3, 4]
     # Check that projected storage accumulates correctly
     expected_storage_1 = df.iloc[79]["storage_bcf"] + res.iloc[0]["predicted_weekly_change"]
     assert pytest.approx(res.iloc[0]["projected_storage"]) == expected_storage_1
@@ -210,7 +229,7 @@ def test_recursive_forecaster_uses_weather_scenario_available_at_origin():
         {
             "date": [start_date, start_date],
             "duoarea": ["R48", "R48"],
-            "issued_at": [start_date - pd.Timedelta(days=2), start_date + pd.Timedelta(days=1)],
+            "issued_at": [start_date - pd.Timedelta(days=8), start_date + pd.Timedelta(days=1)],
             "temperature_f": [40.0, 60.0],
             "hdd": [77.0, 999.0],
             "cdd": [0.0, 0.0],
@@ -290,6 +309,34 @@ def test_recursive_forecaster_aligns_year_ago_storage_to_prior_week_state():
 
     # At target index 53, the feature is S_52 - S_0 = 152 - 100.
     assert forecast.loc[0, "predicted_weekly_change"] == pytest.approx(52.0)
+
+
+def test_recursive_forecaster_rebuilds_training_storage_vs_five_year_average():
+    dates = pd.date_range("2018-01-05", periods=330, freq="W-FRI")
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "week_of_year": dates.isocalendar().week.astype(int).to_numpy(),
+            "weekly_change_bcf": np.ones(len(dates)),
+            "storage_bcf": np.arange(1_000.0, 1_000.0 + len(dates)),
+            "temperature_f": np.full(len(dates), 50.0),
+            "hdd": np.full(len(dates), 20.0),
+            "cdd": np.zeros(len(dates)),
+            "weather_days": np.full(len(dates), 7.0),
+        }
+    )
+    target_date = dates[320]
+    expected = add_storage_features(df).loc[
+        lambda frame: frame["date"] == target_date,
+        "storage_vs_5yr_avg",
+    ].iloc[0]
+
+    forecast = RecursiveForecaster(
+        StorageAverageDifferenceRegressor(),
+        ["storage_vs_5yr_avg"],
+    ).predict_horizon(df, target_date, horizon_weeks=1)
+
+    assert forecast.loc[0, "predicted_weekly_change"] == pytest.approx(expected)
 
 
 def test_recursive_forecaster_rejects_mixed_region_input():

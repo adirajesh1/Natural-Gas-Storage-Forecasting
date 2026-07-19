@@ -49,6 +49,22 @@ def _overall_metrics(
     }
 
 
+def _validate_chronological_fold(
+    data: pd.DataFrame,
+    train_idx: list[int],
+    val_idx: list[int],
+    *,
+    date_col: str,
+) -> None:
+    """Reject splitter output that exposes validation dates during fitting."""
+    if not train_idx or not val_idx:
+        raise ValueError("Backtest folds require non-empty train and validation rows.")
+    train_end = data.iloc[train_idx][date_col].max()
+    validation_start = data.iloc[val_idx][date_col].min()
+    if train_end >= validation_start:
+        raise ValueError("Training dates must precede validation dates in every fold.")
+
+
 def _add_interval_metrics(
     metrics: pd.DataFrame,
     predictions: pd.DataFrame,
@@ -102,6 +118,12 @@ def run_backtest(
     metrics: list[dict[str, float | int | str]] = []
 
     for fold, (train_idx, val_idx) in enumerate(splitter.split(data), start=1):
+        _validate_chronological_fold(
+            data,
+            train_idx,
+            val_idx,
+            date_col=date_col,
+        )
         X_train = data.iloc[train_idx][list(feature_cols)]
         y_train = data.iloc[train_idx][target_col]
         X_val = data.iloc[val_idx][list(feature_cols)]
@@ -164,6 +186,7 @@ def run_recursive_backtest(
     forecast_input_mode: ForecastInputMode = "seasonal",
     weather_scenarios: pd.DataFrame | None = None,
     region: str | None = None,
+    model_key: str | None = None,
     interval_coverage: float | None = None,
     min_calibration_samples: int = 20,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -203,6 +226,12 @@ def run_recursive_backtest(
 
     predictions: list[pd.DataFrame] = []
     for fold, (train_idx, val_idx) in enumerate(splitter.split(model_data), start=1):
+        _validate_chronological_fold(
+            model_data,
+            train_idx,
+            val_idx,
+            date_col=date_col,
+        )
         train_data = model_data.iloc[train_idx]
         validation_dates = model_data.iloc[val_idx][date_col].sort_values()
         if validation_dates.empty:
@@ -219,6 +248,7 @@ def run_recursive_backtest(
             feature_cols,
             date_col=date_col,
             target_col=target_col,
+            model_key=model_key,
         )
         projection = forecaster.predict_horizon(
             features_df=source_data,
@@ -227,6 +257,7 @@ def run_recursive_backtest(
             forecast_input_mode=forecast_input_mode,
             weather_scenario=weather_scenarios,
             region=region,
+            as_of=train_data[date_col].max(),
         )
         if projection.empty:
             continue
@@ -284,5 +315,8 @@ def run_recursive_backtest(
             coverage=interval_coverage,
             group_col="horizon_weeks_ahead",
         )
+        if np.isclose(interval_coverage, 0.80):
+            predictions_df["p10"] = predictions_df["interval_lower"]
+            predictions_df["p90"] = predictions_df["interval_upper"]
 
     return predictions_df, metrics_df

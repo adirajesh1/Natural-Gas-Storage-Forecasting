@@ -69,6 +69,9 @@ def test_incomplete_monthly_cache_is_refetched(monkeypatch):
         refreshed = True
         series = [
             "N3010TX2",
+            "N3020TX2",
+            "N3035TX2",
+            "N3045TX2",
             "N9050TX2",
             *NATIONAL_BASELINE_SERIES,
         ]
@@ -103,6 +106,49 @@ def test_incomplete_monthly_cache_is_refetched(monkeypatch):
     assert refreshed
     assert set(NATIONAL_BASELINE_SERIES).issubset(set(result["series"]))
 
+
+def test_monthly_cache_requires_each_requested_states_consumption_inputs():
+    texas_series = [
+        "N3010TX2",
+        "N3020TX2",
+        "N3035TX2",
+        "N3045TX2",
+        "N9050TX2",
+        *NATIONAL_BASELINE_SERIES,
+    ]
+    cache = pd.DataFrame(
+        {
+            "period": [pd.Timestamp("2024-01-01")] * len(texas_series),
+            "series": texas_series,
+            "value": [1.0] * len(texas_series),
+        }
+    )
+
+    assert not balance_api._monthly_cache_is_usable(
+        cache,
+        ["Texas", "Oklahoma"],
+    )
+
+
+def test_monthly_cache_accepts_eia_dry_production_series_identifier():
+    california_series = [
+        "N3010CA2",
+        "N3020CA2",
+        "N3035CA2",
+        "N3045CA2",
+        "NA1160_SCA_2",
+        *NATIONAL_BASELINE_SERIES,
+    ]
+    cache = pd.DataFrame(
+        {
+            "period": [pd.Timestamp("2024-01-01")] * len(california_series),
+            "series": california_series,
+            "value": [1.0] * len(california_series),
+        }
+    )
+
+    assert balance_api._monthly_cache_is_usable(cache, ["California"])
+
 def test_structural_disaggregator_fit_predict():
     # 1. Create mock monthly EIA data for 2 states (CA, TX)
     periods = pd.date_range(start="2024-01-01", end="2024-12-01", freq="MS")
@@ -118,7 +164,14 @@ def test_structural_disaggregator_fit_predict():
         ])
         for state in ["CA", "TX"]:
             records.extend([
-                {"period": p.strftime("%Y-%m"), "series": f"N9050{state}2", "value": 100000.0, "duoarea": f"S{state}"}, # Marketed Production (100 Bcf)
+                {
+                    "period": p.strftime("%Y-%m"),
+                    "series": (
+                        "NA1160_SCA_2" if state == "CA" else f"N9050{state}2"
+                    ),
+                    "value": 100000.0,
+                    "duoarea": f"S{state}",
+                },  # State dry or marketed production (100 Bcf)
                 {"period": p.strftime("%Y-%m"), "series": f"N3010{state}2", "value": 20000.0, "duoarea": f"S{state}"},      # Res (20 Bcf)
                 {"period": p.strftime("%Y-%m"), "series": f"N3020{state}2", "value": 10000.0, "duoarea": f"S{state}"},      # Com (10 Bcf)
                 {"period": p.strftime("%Y-%m"), "series": f"N3035{state}2", "value": 30000.0, "duoarea": f"S{state}"},      # Ind (30 Bcf)

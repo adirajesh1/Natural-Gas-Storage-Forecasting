@@ -18,6 +18,11 @@ class MeanRegressor(BaseEstimator, RegressorMixin):
         return [self.mean_] * len(X)
 
 
+class OverlappingSplitter:
+    def split(self, df):
+        yield [0, 1, 2, 3], [3, 4]
+
+
 def _training_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -91,6 +96,18 @@ def test_run_backtest_does_not_mutate_input_or_create_lag_features():
     pd.testing.assert_frame_equal(df, original)
     assert "weekly_change_lag1" in df.columns
     assert "weekly_change_lag1" not in predictions.columns
+
+
+def test_run_backtest_rejects_splitter_with_training_validation_overlap():
+    with pytest.raises(ValueError, match="must precede"):
+        run_backtest(
+            _training_frame(),
+            feature_cols=["feature"],
+            target_col="weekly_change_bcf",
+            date_col="date",
+            model=MeanRegressor(),
+            splitter=OverlappingSplitter(),
+        )
 
 
 def test_run_backtest_with_lightgbm_and_xgboost_if_installed():

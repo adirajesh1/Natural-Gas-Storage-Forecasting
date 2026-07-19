@@ -332,6 +332,8 @@ def _component_history(
 ) -> pd.DataFrame:
     data = vintages.loc[vintages["component"] == component].copy()
     data = data.rename(columns={"issued_at": "forecast_origin", "valid_at": "delivery_hour"})
+    if "retrieved_at" in data:
+        data["retrieved_at"] = pd.to_datetime(data["retrieved_at"], utc=True)
     actual_col = _component_actual_column(component)
     if not actuals.empty and actual_col in actuals:
         data = data.merge(
@@ -348,11 +350,15 @@ def _component_history(
     data["horizon_bucket"] = horizon_bucket(data["horizon_hour"])
     data["recent_error_mw"] = 0.0
     for origin in sorted(data["forecast_origin"].unique()):
-        known = data.loc[
+        known_mask = (
             (data["forecast_origin"] < origin)
             & (data["delivery_hour"] < origin)
             & data["actual_mw"].notna()
-        ].sort_values("delivery_hour")
+        )
+        if "retrieved_at" in data:
+            known_mask &= data["retrieved_at"] <= origin
+        known = data.loc[known_mask].sort_values(["delivery_hour", "forecast_origin"])
+        known = known.drop_duplicates("delivery_hour", keep="last")
         if not known.empty:
             recent = float((known["actual_mw"] - known["baseline_mw"]).tail(24).mean())
             data.loc[data["forecast_origin"] == origin, "recent_error_mw"] = recent
@@ -456,7 +462,17 @@ def _current_component(
         actual_col=_component_actual_column(component),
     )
     history = _component_history(vintages, actuals, component, weather)
-    known = history.loc[(history["delivery_hour"] < origin) & history["actual_mw"].notna()]
+    known_mask = (
+        (history["forecast_origin"] < origin)
+        & (history["delivery_hour"] < origin)
+        & history["actual_mw"].notna()
+    )
+    if "retrieved_at" in history:
+        known_mask &= history["retrieved_at"] <= origin
+    known = history.loc[known_mask].sort_values(
+        ["delivery_hour", "forecast_origin"]
+    )
+    known = known.drop_duplicates("delivery_hour", keep="last")
     future["recent_error_mw"] = (
         float((known["actual_mw"] - known["baseline_mw"]).tail(24).mean())
         if not known.empty
@@ -538,7 +554,11 @@ def _attach_gas_intervals(
     required = {"gas_generation_actual_mw", "coal_generation_actual_mw"}
     if actuals.empty or not required.issubset(actuals.columns):
         return data
-    history = actuals.dropna(subset=list(required)).copy().sort_values("valid_at")
+    history = actuals.dropna(subset=list(required)).copy()
+    if "forecast_origin" in data and "valid_at" in history:
+        origin = pd.to_datetime(data["forecast_origin"], utc=True).min()
+        history = history.loc[pd.to_datetime(history["valid_at"], utc=True) < origin]
+    history = history.sort_values("valid_at")
     dispatchable = history["gas_generation_actual_mw"] + history["coal_generation_actual_mw"]
     share = history["gas_generation_actual_mw"].div(dispatchable.where(dispatchable > 0))
     trailing_share = share.rolling(24 * 30, min_periods=24).mean()
@@ -584,8 +604,13 @@ def build_power_forecast(
         raise FileNotFoundError("Run run_power_data_pipeline before building a forecast.")
     for column in ("issued_at", "retrieved_at", "valid_at"):
         vintages[column] = pd.to_datetime(vintages[column], utc=True)
-    origin_utc = _utc(origin or vintages["issued_at"].max()).floor("h")
-    delivery_hours = pd.date_range(origin_utc + pd.Timedelta(hours=1), periods=horizon_hours, freq="h", tz="UTC")
+    origin_utc = (
+        _utc(origin)
+        if origin is not None
+        else pd.to_datetime(vintages["retrieved_at"], utc=True).max()
+    )
+    first_delivery = origin_utc.floor("h") + pd.Timedelta(hours=1)
+    delivery_hours = pd.date_range(first_delivery, periods=horizon_hours, freq="h", tz="UTC")
     actuals = _actual_history(processed_dir)
     weather = _load_optional(_latest_path(processed_dir, "weather_vintages"))
     if gas_price is None:
@@ -643,7 +668,12 @@ def build_power_forecast(
         forecast[column] = outages[column].fillna(0.0).to_numpy() if column in outages else 0.0
     forecast["available_capacity_mw"] = adequacy["available_capacity_mw"].to_numpy() if "available_capacity_mw" in adequacy else np.nan
     forecast["geography"] = "ERCOT"
-    forecast["retrieved_at"] = vintages["retrieved_at"].max()
+    eligible_retrievals = vintages.loc[
+        vintages["retrieved_at"] <= origin_utc, "retrieved_at"
+    ]
+    forecast["retrieved_at"] = (
+        eligible_retrievals.max() if not eligible_retrievals.empty else pd.NaT
+    )
     forecast = build_physical_stack(
         forecast,
         actuals,

@@ -75,6 +75,61 @@ def test_build_weekly_crude_balance_converts_units_and_closes_identity():
     assert result.loc[1, "balance_adjustment_mmbbl"] == pytest.approx(1.0)
 
 
+def test_build_weekly_crude_balance_rejects_incomplete_week():
+    rows = _long_week(
+        "2026-01-02",
+        production_kbpd=10_000,
+        imports_kbpd=5_000,
+        refinery_inputs_kbpd=12_000,
+        exports_kbpd=2_000,
+        commercial_stocks_kb=400_000,
+        spr_stocks_kb=100_000,
+    )
+    rows.extend(
+        _long_week(
+            "2026-01-09",
+            production_kbpd=10_000,
+            imports_kbpd=5_000,
+            refinery_inputs_kbpd=12_000,
+            exports_kbpd=2_000,
+            commercial_stocks_kb=406_000,
+        )
+    )
+
+    with pytest.raises(ValueError, match="incomplete component rows"):
+        build_weekly_crude_balance(pd.DataFrame(rows))
+
+
+def test_build_weekly_crude_balance_rejects_non_friday_periods():
+    rows = _long_week(
+        "2026-01-01",
+        production_kbpd=10_000,
+        imports_kbpd=5_000,
+        refinery_inputs_kbpd=12_000,
+        exports_kbpd=2_000,
+        commercial_stocks_kb=400_000,
+        spr_stocks_kb=100_000,
+    )
+
+    with pytest.raises(ValueError, match="Friday week-ending dates"):
+        build_weekly_crude_balance(pd.DataFrame(rows))
+
+
+def test_build_weekly_crude_balance_rejects_negative_raw_value():
+    rows = _long_week(
+        "2026-01-02",
+        production_kbpd=10_000,
+        imports_kbpd=-1,
+        refinery_inputs_kbpd=12_000,
+        exports_kbpd=2_000,
+        commercial_stocks_kb=400_000,
+        spr_stocks_kb=100_000,
+    )
+
+    with pytest.raises(ValueError, match="negative values"):
+        build_weekly_crude_balance(pd.DataFrame(rows))
+
+
 def test_oil_model_combines_forecast_components_through_balance_identity():
     balance = _synthetic_balance(120)
     target = balance["date"].max() + pd.Timedelta(days=7)
@@ -98,6 +153,38 @@ def test_oil_model_rejects_nonconsecutive_weekly_balance():
     balance = _synthetic_balance(60).drop(index=30)
 
     with pytest.raises(ValueError, match="consecutive weekly rows"):
+        OilFundamentalsModel().fit(balance)
+
+
+def test_oil_model_rejects_non_friday_dates():
+    balance = _synthetic_balance(60)
+    balance["date"] -= pd.Timedelta(days=1)
+
+    with pytest.raises(ValueError, match="Friday week-ending dates"):
+        OilFundamentalsModel().fit(balance)
+
+
+def test_oil_model_rejects_interior_missing_component_value():
+    balance = _synthetic_balance(60)
+    balance.loc[30, "imports_mmbbl"] = np.nan
+
+    with pytest.raises(ValueError, match="missing values in imports_mmbbl"):
+        OilFundamentalsModel().fit(balance)
+
+
+def test_oil_model_rejects_non_finite_component_value():
+    balance = _synthetic_balance(60)
+    balance.loc[30, "production_mmbbl"] = np.inf
+
+    with pytest.raises(ValueError, match="non-finite values in production_mmbbl"):
+        OilFundamentalsModel().fit(balance)
+
+
+def test_oil_model_rejects_negative_physical_flow():
+    balance = _synthetic_balance(60)
+    balance.loc[30, "imports_mmbbl"] = -1.0
+
+    with pytest.raises(ValueError, match="negative values in imports_mmbbl"):
         OilFundamentalsModel().fit(balance)
 
 

@@ -75,12 +75,20 @@ def validate_weather_scenarios(scenarios: pd.DataFrame) -> pd.DataFrame:
 
     if (data["weather_days"] <= 0).any():
         raise ValueError("Weather scenario weather_days must be positive.")
-    if data.duplicated(subset=["date", "duoarea", "issued_at"]).any():
+    version_columns = [
+        column
+        for column in ("provider", "model", "model_run")
+        if column in data.columns
+    ]
+    identity_columns = ["date", "duoarea", "issued_at", *version_columns]
+    if data.duplicated(subset=identity_columns).any():
         raise ValueError(
-            "Weather scenarios contain duplicate (date, duoarea, issued_at) rows."
+            "Weather scenarios contain duplicate forecast-version rows."
         )
 
-    return data.sort_values(["duoarea", "date", "issued_at"]).reset_index(drop=True)
+    return data.sort_values(["duoarea", "date", "issued_at", *version_columns]).reset_index(
+        drop=True
+    )
 
 
 def select_weather_scenario_as_of(
@@ -89,6 +97,8 @@ def select_weather_scenario_as_of(
     *,
     region: str,
     target_dates: Iterable[object] | None = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> pd.DataFrame:
     """Select the latest scenario version available at a forecast origin.
 
@@ -101,6 +111,27 @@ def select_weather_scenario_as_of(
         (data["duoarea"] == region)
         & (data["issued_at"] <= _as_utc_timestamp(as_of))
     ].copy()
+    if provider is not None:
+        if "provider" not in available.columns:
+            raise ValueError("Weather scenarios do not contain provider metadata.")
+        available = available.loc[available["provider"] == provider].copy()
+    if model is not None:
+        if "model" not in available.columns:
+            raise ValueError("Weather scenarios do not contain model metadata.")
+        available = available.loc[available["model"] == model].copy()
+
+    version_columns = [
+        column for column in ("provider", "model") if column in available.columns
+    ]
+    if version_columns and provider is None and model is None and not available.empty:
+        latest = available.loc[
+            available["issued_at"]
+            == available.groupby(["date", "duoarea"])["issued_at"].transform("max")
+        ]
+        if latest.groupby(["date", "duoarea"])[version_columns].size().gt(1).any():
+            raise ValueError(
+                "Multiple weather models are available; select provider= or model=."
+            )
     selected = available.sort_values("issued_at").drop_duplicates(
         subset=["date", "duoarea"],
         keep="last",

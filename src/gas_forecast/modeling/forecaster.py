@@ -142,12 +142,14 @@ def _same_week_storage_average(
     *,
     fallback: float,
     years: int = 5,
+    before_date: pd.Timestamp | None = None,
+    date_col: str = "date",
 ) -> float:
     """Return the trailing same-week storage average known at forecast origin."""
-    values = history.loc[
-        history["week_of_year"] == week_of_year,
-        "storage_bcf",
-    ].dropna()
+    eligible = history["week_of_year"] == week_of_year
+    if before_date is not None:
+        eligible &= history[date_col] < before_date
+    values = history.loc[eligible, "storage_bcf"].dropna()
     if values.empty:
         return fallback
     return float(values.tail(years).mean())
@@ -232,6 +234,7 @@ def _recursive_feature_values(
     target_date: pd.Timestamp,
     weather: _WeatherScenario,
     needs_balance_features: bool,
+    date_col: str,
 ) -> dict[str, float | int]:
     """Rebuild all supported model inputs before predicting one target week."""
     week_of_year = _week_of_year(target_date)
@@ -240,9 +243,10 @@ def _recursive_feature_values(
         history,
         _week_of_year(previous_week),
         fallback=state.storage_bcf,
+        before_date=previous_week,
+        date_col=date_col,
     )
 
-    previous_week = target_date - pd.Timedelta(weeks=1)
     prev_iso = previous_week.isocalendar()
     last_year_date = next(
         (
@@ -262,6 +266,8 @@ def _recursive_feature_values(
             history,
             _week_of_year(last_year_date),
             fallback=state.storage_bcf,
+            before_date=previous_week,
+            date_col=date_col,
         )
 
     week_angle = 2 * np.pi * week_of_year / 52.0
@@ -337,11 +343,13 @@ class RecursiveForecaster:
         *,
         date_col: str = "date",
         target_col: str = "weekly_change_bcf",
+        model_key: str | None = None,
     ) -> None:
         self.model = model
         self.feature_cols = list(feature_cols)
         self.date_col = date_col
         self.target_col = target_col
+        self.model_key = model_key or type(model).__name__
 
     def _validate_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
         unsupported = sorted(set(self.feature_cols) - RECURSIVE_FEATURE_COLUMNS)
@@ -450,6 +458,10 @@ class RecursiveForecaster:
         forecast_input_mode: ForecastInputMode = "seasonal",
         weather_scenario: pd.DataFrame | None = None,
         region: str | None = None,
+        as_of: pd.Timestamp | str | None = None,
+        weather_provider: str | None = None,
+        weather_model: str | None = None,
+        reconciliation_method: str = "unreconciled",
     ) -> pd.DataFrame:
         """Project weekly changes and storage levels from ``start_date`` forward.
 
@@ -458,7 +470,8 @@ class RecursiveForecaster:
         that date are used only for optional observed-input diagnostics and for
         returned actuals; seasonal mode never reads their feature values. In
         ``"scenario"`` mode, the supplied weekly weather forecasts are filtered
-        by their ``issued_at`` timestamp at ``start_date``.
+        by their ``issued_at`` timestamp at ``as_of``. If omitted, ``as_of`` is
+        the last historical date before ``start_date``.
         """
         if horizon_weeks < 1:
             raise ValueError("horizon_weeks must be at least 1.")
@@ -496,6 +509,13 @@ class RecursiveForecaster:
         history = data.loc[data[self.date_col] < start].copy()
         if history.empty:
             raise ValueError(f"No historical actuals found prior to start date {start}")
+        forecast_origin = (
+            pd.Timestamp(as_of)
+            if as_of is not None
+            else pd.Timestamp(history[self.date_col].max())
+        )
+        if forecast_origin >= start:
+            raise ValueError("as_of must precede the first forecast target date.")
 
         needs_balance_features = bool(set(self.feature_cols) & _BALANCE_FEATURE_COLUMNS)
         state = self._initial_state(
@@ -522,14 +542,16 @@ class RecursiveForecaster:
         if forecast_input_mode == "scenario":
             selected_scenario = select_weather_scenario_as_of(
                 weather_scenario,
-                as_of=start,
+                as_of=forecast_origin,
                 region=scenario_region,
                 target_dates=projection_dates,
+                provider=weather_provider,
+                model=weather_model,
             )
             scenario_by_date = selected_scenario.set_index("date")
 
-        projections: list[dict[str, float | int | pd.Timestamp]] = []
-        for target_date in projection_dates:
+        projections: list[dict[str, object]] = []
+        for horizon, target_date in enumerate(projection_dates, start=1):
             week_of_year = _week_of_year(target_date)
             observed = (
                 observed_by_date.loc[target_date]
@@ -562,6 +584,7 @@ class RecursiveForecaster:
                 target_date=target_date,
                 weather=weather,
                 needs_balance_features=needs_balance_features,
+                date_col=self.date_col,
             )
             feature_row = pd.DataFrame(
                 [[feature_values[column] for column in self.feature_cols]],
@@ -580,7 +603,34 @@ class RecursiveForecaster:
             projections.append(
                 {
                     "date": target_date,
+                    "forecast_origin": forecast_origin,
+                    "region": scenario_region,
+                    "horizon": horizon,
+                    "model_key": self.model_key,
+                    "reconciliation_method": reconciliation_method,
+                    "weather_provider": (
+                        scenario.get("provider", "archived_forecast")
+                        if scenario is not None
+                        else (
+                            "observed_oracle"
+                            if forecast_input_mode == "observed"
+                            else "seasonal_norm"
+                        )
+                    ),
+                    "weather_model": (
+                        scenario.get("model", pd.NA)
+                        if scenario is not None
+                        else pd.NA
+                    ),
+                    "weather_run": (
+                        scenario.get("model_run", scenario.get("issued_at", pd.NA))
+                        if scenario is not None
+                        else pd.NA
+                    ),
                     "predicted_weekly_change": predicted_change,
+                    "p10": np.nan,
+                    "p50": predicted_change,
+                    "p90": np.nan,
                     "projected_storage": projected_storage,
                     "actual_weekly_change": _observed_value(
                         observed,

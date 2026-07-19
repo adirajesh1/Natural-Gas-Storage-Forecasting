@@ -6,6 +6,8 @@ from gas_forecast.modeling.models.linear_regression import (
 )
 from gas_forecast.modeling.models.sarima import WeeklyChangeSARIMAModel
 from gas_forecast.modeling.models.disaggregation import StructuralDisaggregator
+from gas_forecast.modeling.models.arimax import ARIMAXRegressor
+from gas_forecast.modeling.models.nhits import PooledNHITSForecaster
 
 __all__ = [
     "WeeklyChangeForecastModel",
@@ -14,4 +16,6 @@ __all__ = [
     "WeeklyChangeLinearRegressionModel",
     "WeeklyChangeSARIMAModel",
     "StructuralDisaggregator",
+    "ARIMAXRegressor",
+    "PooledNHITSForecaster",
 ]

@@ -1,8 +1,10 @@
 import pandas as pd
+import pytest
 
 from gas_forecast.data.weather import (
     aggregate_weather_to_storage_weeks,
     assign_storage_week_end,
+    validate_state_daily_weather,
 )
 
 
@@ -31,3 +33,23 @@ def test_aggregate_weather_to_storage_weeks_drops_incomplete_weeks():
     assert weekly.loc[0, "weather_days"] == 7
     assert weekly.loc[0, "hdd"] == 7.0
     assert weekly.loc[0, "cdd"] == 14.0
+
+
+def test_validate_state_daily_weather_rejects_incomplete_state_date_grid():
+    weather = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2024-01-01", "2024-01-01", "2024-01-02"]
+            ),
+            "temperature_f": [40.0, 45.0, 42.0],
+            "state": ["Texas", "Oklahoma", "Texas"],
+            "population": [30.0, 4.0, 30.0],
+            "population_weight": [0.88, 0.12, 0.88],
+        }
+    )
+
+    with pytest.raises(ValueError, match="incomplete state coverage"):
+        validate_state_daily_weather(
+            weather,
+            expected_states={"Texas", "Oklahoma"},
+        )

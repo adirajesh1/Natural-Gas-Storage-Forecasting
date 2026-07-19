@@ -59,13 +59,20 @@ class StructuralDisaggregator:
                 return "price"
             elif series.startswith("N9050"):
                 return "marketed_production"
+            elif series.startswith("NA1160_S"):
+                return "dry_production"
             return None
 
         state_df["component"] = state_df["series"].apply(map_series_to_component)
         state_df = state_df.dropna(subset=["component"])
         
-        # Extract state abbreviation (letters at index 5:7)
+        # Legacy marketed-production IDs embed the state at positions 5:7;
+        # current dry-production IDs use the ``_SXX_`` form.
         state_df["abbr"] = state_df["series"].str.slice(5, 7)
+        dry_production = state_df["component"].eq("dry_production")
+        state_df.loc[dry_production, "abbr"] = state_df.loc[
+            dry_production, "series"
+        ].str.extract(r"_S([A-Z]{2})_", expand=False)
         
         # Filter explicitly to the region's states to avoid double-counting national/other totals
         state_abbrs = {STATE_TO_ABBR.get(s) for s in states if STATE_TO_ABBR.get(s)}
@@ -77,7 +84,11 @@ class StructuralDisaggregator:
         
         # Forward-fill marketed_production per state before zeroing
         pivoted = pivoted.sort_values("period")
-        for col in ["res", "com", "ind", "power_burn", "price", "marketed_production"]:
+        production_columns = ["marketed_production", "dry_production"]
+        component_columns = [
+            "res", "com", "ind", "power_burn", "price", *production_columns
+        ]
+        for col in component_columns:
             if col not in pivoted.columns:
                 pivoted[col] = np.nan
         
@@ -87,7 +98,7 @@ class StructuralDisaggregator:
         monthly_price = price_m.groupby("period")["value"].mean().rename("price_hh").reset_index()
         pivoted = pivoted.merge(monthly_price, on="period", how="left")
 
-        for col in ["res", "com", "ind", "power_burn", "price", "marketed_production"]:
+        for col in component_columns:
             pivoted[col] = pivoted.groupby("abbr")[col].transform(lambda s: s.ffill())
             if col == "price":
                 # Fall back to Henry Hub price if a state has no price history at all
@@ -97,7 +108,13 @@ class StructuralDisaggregator:
                 pivoted[col] = pivoted[col].fillna(0.0)
                 
         # Convert MMcf to Bcf for volumes
-        for col in ["res", "com", "ind", "power_burn", "marketed_production"]:
+        # Some EIA aliases resolve to dry production instead of marketed
+        # production. Prefer the directly reported dry value if both appear.
+        pivoted.loc[
+            pivoted["dry_production"] > 0,
+            "marketed_production",
+        ] = 0.0
+        for col in ["res", "com", "ind", "power_burn", *production_columns]:
             pivoted[f"{col}_bcf"] = pivoted[col] / 1000.0
             
         # Compute retail consumption in Bcf (Res + Com + Ind + Power Burn)
@@ -115,6 +132,7 @@ class StructuralDisaggregator:
             ind_sum=pd.NamedAgg(column="ind_bcf", aggfunc="sum"),
             power_burn_sum=pd.NamedAgg(column="power_burn_bcf", aggfunc="sum"),
             marketed_production_sum=pd.NamedAgg(column="marketed_production_bcf", aggfunc="sum"),
+            dry_production_sum=pd.NamedAgg(column="dry_production_bcf", aggfunc="sum"),
             total_price_weighted=pd.NamedAgg(column="price_weighted", aggfunc="sum"),
             total_consumption=pd.NamedAgg(column="consumption_bcf", aggfunc="sum")
         ).reset_index()
@@ -123,6 +141,7 @@ class StructuralDisaggregator:
         regional_monthly["power_burn"] = regional_monthly["power_burn_sum"]
         regional_monthly["ind"] = regional_monthly["ind_sum"]
         regional_monthly["marketed_production"] = regional_monthly["marketed_production_sum"]
+        regional_monthly["reported_dry_production"] = regional_monthly["dry_production_sum"]
         
         regional_monthly["regional_price"] = np.where(
             regional_monthly["total_consumption"] > 0,
@@ -133,17 +152,23 @@ class StructuralDisaggregator:
         # Merge regional aggregates with national series
         merged_monthly = regional_monthly.merge(national_monthly, on="period", how="inner")
         
-        # Downscale national dry production to regional dry production
-        # Dry Production = National Dry Production * (Regional Marketed / National Marketed)
-        # Forward-fill the ratio within the reporting-lag window so that missing months
-        # use the last known regional share instead of collapsing to zero.
-        raw_ratio = np.where(
+        # Use reported state dry production where EIA supplies it. For states
+        # represented by marketed production, apply the national dry/marketed ratio.
+        dry_to_marketed_ratio = np.where(
             merged_monthly["N9050US2"] > 0,
-            merged_monthly["marketed_production"] / merged_monthly["N9050US2"],
+            merged_monthly["N9070US2"] / merged_monthly["N9050US2"],
             np.nan
         )
-        prod_ratio = pd.Series(raw_ratio).ffill().fillna(0.0).values
-        merged_monthly["dry_production"] = merged_monthly["N9070US2"] * prod_ratio
+        dry_to_marketed_ratio = pd.Series(dry_to_marketed_ratio).ffill().fillna(0.0).values
+        merged_monthly["dry_production"] = (
+            merged_monthly["reported_dry_production"]
+            + merged_monthly["marketed_production"] * dry_to_marketed_ratio
+        )
+        prod_ratio = np.where(
+            merged_monthly["N9070US2"] > 0,
+            merged_monthly["dry_production"] / merged_monthly["N9070US2"],
+            0.0,
+        )
         
         # Downscale national fuel use components to regional totals
         merged_monthly["retail_consumption"] = (

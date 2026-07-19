@@ -86,6 +86,9 @@ def validate_state_daily_weather(
     if weather["temperature_f"].isna().any():
         raise ValueError("Found missing values in 'temperature_f'.")
 
+    if weather["date"].isna().any():
+        raise ValueError("Found missing values in 'date'.")
+
     if weather.duplicated(subset=["date", "state"]).any():
         raise ValueError("Found duplicate date/state rows.")
 
@@ -98,3 +101,12 @@ def validate_state_daily_weather(
                 f"Weather states do not match region. "
                 f"Missing: {missing}. Extra: {extra}."
             )
+
+    expected_count = (
+        len(expected_states)
+        if expected_states is not None
+        else weather["state"].nunique()
+    )
+    states_per_date = weather.groupby("date")["state"].nunique()
+    if states_per_date.ne(expected_count).any():
+        raise ValueError("Daily weather has incomplete state coverage for some dates.")

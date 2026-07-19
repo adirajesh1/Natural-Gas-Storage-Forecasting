@@ -186,12 +186,100 @@ def build_parser() -> argparse.ArgumentParser:
         help="Processed parquet output directory.",
     )
 
+    weather_forecast = subparsers.add_parser(
+        "weather-forecast",
+        help="Archive live GEFS or historical fixed-lead GFS weather forecasts.",
+    )
+    weather_forecast.add_argument("--region", required=True)
+    weather_forecast.add_argument(
+        "--issued-at",
+        help="Live forecast issue timestamp. Required unless start/end dates are supplied.",
+    )
+    weather_forecast.add_argument("--start-date")
+    weather_forecast.add_argument("--end-date")
+    weather_forecast.add_argument("--forecast-days", type=int, default=16)
+    weather_forecast.add_argument("--max-lead-days", type=int, default=7)
+    weather_forecast.add_argument("--weight-history-path", type=Path)
+    weather_forecast.add_argument("--weight-column", default="gas_load")
+    weather_forecast.add_argument(
+        "--processed-dir",
+        type=Path,
+        default=DEFAULT_PROCESSED_DIR,
+    )
+
+    regional_backtest = subparsers.add_parser(
+        "regional-backtest",
+        help="Backtest all storage regions and compare direct, bottom-up, and MinT paths.",
+    )
+    regional_backtest.add_argument("--model", default="hist_gradient_boosting")
+    regional_backtest.add_argument(
+        "--weather-input",
+        choices=("seasonal", "scenario", "observed"),
+        default="seasonal",
+    )
+    regional_backtest.add_argument("--weather-scenarios-path", type=Path)
+    regional_backtest.add_argument("--initial-train-start", default="2010-01-01")
+    regional_backtest.add_argument("--initial-train-end", default="2020-12-31")
+    regional_backtest.add_argument("--horizon-weeks", type=int, default=4)
+    regional_backtest.add_argument("--step-weeks", type=int, default=4)
+    regional_backtest.add_argument(
+        "--processed-dir", type=Path, default=DEFAULT_PROCESSED_DIR
+    )
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "regional-backtest":
+        from gas_forecast.pipelines.modeling import run_regional_model_backtest
+
+        outputs = run_regional_model_backtest(
+            model_key=args.model,
+            forecast_input_mode=args.weather_input,
+            weather_scenarios_path=args.weather_scenarios_path,
+            initial_train_start=args.initial_train_start,
+            initial_train_end=args.initial_train_end,
+            horizon_weeks=args.horizon_weeks,
+            step_weeks=args.step_weeks,
+            processed_dir=args.processed_dir,
+        )
+        _print_outputs(outputs)
+        return 0
+
+    if args.command == "weather-forecast":
+        from gas_forecast.pipelines.asof import (
+            run_historical_weather_forecast_pipeline,
+            run_live_weather_forecast_pipeline,
+        )
+
+        if bool(args.start_date) != bool(args.end_date):
+            parser.error("Provide both --start-date and --end-date.")
+        if args.start_date:
+            outputs = run_historical_weather_forecast_pipeline(
+                args.region,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                max_lead_days=args.max_lead_days,
+                weight_history_path=args.weight_history_path,
+                weight_col=args.weight_column,
+                processed_dir=args.processed_dir,
+            )
+        else:
+            if not args.issued_at:
+                parser.error("Live weather forecasts require --issued-at.")
+            outputs = run_live_weather_forecast_pipeline(
+                args.region,
+                issued_at=args.issued_at,
+                forecast_days=args.forecast_days,
+                weight_history_path=args.weight_history_path,
+                weight_col=args.weight_column,
+                processed_dir=args.processed_dir,
+            )
+        _print_outputs(outputs)
+        return 0
 
     if args.command == "weather-scenario":
         from gas_forecast.pipelines.asof import run_weather_scenario_pipeline

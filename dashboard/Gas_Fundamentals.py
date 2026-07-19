@@ -30,15 +30,15 @@ from gas_forecast.modeling import (
 
 
 @st.cache_data
-def load_methodology_document() -> str:
-    """Read mathematical formulations from docs/METHODOLOGY.md (disk I/O cached)."""
-    doc_path = Path(__file__).resolve().parent.parent / "docs" / "METHODOLOGY.md"
+def load_model_document() -> str:
+    """Read the current gas model specification (disk I/O cached)."""
+    doc_path = Path(__file__).resolve().parent.parent / "docs" / "models.md"
     if doc_path.exists():
         try:
             return doc_path.read_text(encoding="utf-8")
         except Exception as exc:
-            return f"Error loading methodology document: {exc}"
-    return "Methodology document not found at `docs/METHODOLOGY.md`."
+            return f"Error loading model specification: {exc}"
+    return "Model specification not found at `docs/models.md`."
 
 
 st.set_page_config(
@@ -90,7 +90,11 @@ balance_file = processed_dir / f"{slug}_weekly_supply_demand_balance_latest.parq
 if st.sidebar.button("Run Pipeline / Refresh Data"):
     with st.spinner(f"Running supply-demand pipeline for {region_options[selected_region]}..."):
         try:
-            saved_path = run_balance_pipeline(selected_region, processed_dir=processed_dir)
+            saved_path = run_balance_pipeline(
+                selected_region,
+                processed_dir=processed_dir,
+                force_refresh=True,
+            )
             st.sidebar.success(f"Pipeline completed! Saved to {saved_path.name}")
         except Exception as e:
             st.sidebar.error(f"Pipeline failed: {e}")
@@ -182,7 +186,7 @@ else:
         "3 · Inventory / adequacy",
         "4 · Fuel & flows",
         "5 · Market prices",
-        "6 · Diagnostics & methodology",
+        "6 · Diagnostics & models",
     ])
 
     with balance_tab:
@@ -362,7 +366,11 @@ else:
                 H = ((end_season - last_actual_date).days + 6) // 7
             
             # Generate predictions
-            forecaster = RecursiveForecaster(fitted_model, feature_cols)
+            forecaster = RecursiveForecaster(
+                fitted_model,
+                feature_cols,
+                model_key=selected_model_key,
+            )
             proj = forecaster.predict_horizon(
                 features_df=features_df,
                 start_date=last_actual_date + pd.Timedelta(weeks=1),
@@ -657,7 +665,7 @@ else:
             "because they evaluate the storage model shown there."
         )
         st.markdown("## 📖 Rigorous Mathematical Methodology & Framework")
-        st.markdown(load_methodology_document())
+        st.markdown(load_model_document())
     st.markdown("---")
     st.header("🧠 Gemini Price Explainability Layer")
     st.write("Select a week to generate a natural language market analysis report explaining the supply/demand drivers and spot price impact.")

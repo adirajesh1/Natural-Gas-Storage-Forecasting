@@ -10,7 +10,7 @@ import requests
 
 from power_forecast.config import load_local_env
 
-from power_forecast.schemas import ERCOT_GEOGRAPHY, find_column
+from power_forecast.schemas import ERCOT_GEOGRAPHY, find_column, normalized_name
 
 
 EIA930_BASE = "https://api.eia.gov/v2/electricity/rto"
@@ -47,13 +47,22 @@ def normalize_eia930(frame: pd.DataFrame) -> pd.DataFrame:
         "nuclear_actual_mw": ["nuclear_actual_mw", "nuclear"],
         "hydro_actual_mw": ["hydro_actual_mw", "hydro", "hydroelectric"],
         "other_nonthermal_actual_mw": ["other_nonthermal_actual_mw", "other", "other_energy_sources"],
-        "net_imports_actual_mw": ["net_imports_actual_mw", "net_imports", "interchange"],
+        "net_imports_actual_mw": [
+            "net_imports_actual_mw",
+            "net_imports",
+            "total_interchange",
+            "interchange",
+        ],
         "battery_net_discharge_actual_mw": ["battery_net_discharge_actual_mw", "battery", "battery_storage"],
     }
     result = data[["valid_at"]].copy()
     for output, candidates in aliases.items():
         column = find_column(data, candidates, required=False)
-        result[output] = pd.to_numeric(data[column], errors="coerce") if column else np.nan
+        values = pd.to_numeric(data[column], errors="coerce") if column else np.nan
+        if output == "net_imports_actual_mw" and column is not None:
+            if normalized_name(column) in {"totalinterchange", "interchange"}:
+                values = -values
+        result[output] = values
     result["geography"] = ERCOT_GEOGRAPHY
     return result.groupby(["valid_at", "geography"], as_index=False).last()
 

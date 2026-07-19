@@ -11,8 +11,10 @@ from gas_forecast.data.balance_asof import (
 from gas_forecast.data.weather_scenarios import select_weather_scenario_as_of
 from gas_forecast.pipelines.asof import (
     run_asof_balance_pipeline,
+    run_live_weather_forecast_pipeline,
     run_weather_scenario_pipeline,
 )
+from gas_forecast.data.weather_forecasts import parse_open_meteo_ensemble_response
 
 
 def test_weather_scenario_selection_uses_only_versions_available_at_origin():
@@ -138,3 +140,53 @@ def test_asof_pipelines_materialize_processed_artifacts():
         assert pd.read_parquet(balance_path).loc[
             0, "local_balance_lag1"
         ] == pytest.approx(10.0)
+
+
+def test_live_forecast_pipeline_materializes_member_and_weekly_archives(
+    monkeypatch,
+):
+    locations = pd.DataFrame(
+        {
+            "STNAME": ["Alpha"],
+            "duoarea": ["R31"],
+            "LATITUDE": [40.0],
+            "LONGITUDE": [-75.0],
+            "WEIGHT": [1.0],
+        }
+    )
+    dates = pd.date_range("2024-01-06", periods=7, freq="D").strftime("%Y-%m-%d").tolist()
+    archive = parse_open_meteo_ensemble_response(
+        locations,
+        {
+            "daily": {
+                "time": dates,
+                "temperature_2m_mean_member01": [40.0] * 7,
+                "temperature_2m_mean_member02": [50.0] * 7,
+            }
+        },
+        issued_at="2024-01-05T00:00:00Z",
+    )
+    monkeypatch.setattr(
+        "gas_forecast.pipelines.asof._forecast_locations",
+        lambda region: locations,
+    )
+    monkeypatch.setattr(
+        "gas_forecast.pipelines.asof.fetch_open_meteo_gefs_ensemble",
+        lambda *args, **kwargs: archive,
+    )
+
+    with TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+        outputs = run_live_weather_forecast_pipeline(
+            "R31",
+            issued_at="2024-01-05T00:00:00Z",
+            processed_dir=temp_dir,
+        )
+
+        assert set(outputs.paths) == {
+            "state_forecast_archive",
+            "regional_forecast_archive",
+            "weekly_weather_scenarios",
+        }
+        weekly = pd.read_parquet(outputs.paths["weekly_weather_scenarios"])
+        assert weekly.loc[0, "ensemble_members"] == 2
+        assert weekly.loc[0, "duoarea"] == "R31"

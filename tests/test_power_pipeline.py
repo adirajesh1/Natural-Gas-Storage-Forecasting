@@ -166,3 +166,39 @@ def test_live_refresh_uses_wall_clock_retrieval_time(monkeypatch):
 
     retrieved = pd.to_datetime(result["retrieved_at"], utc=True).iloc[0]
     assert before <= retrieved <= after
+
+
+def test_default_forecast_origin_includes_latest_retrieved_baselines():
+    issued = pd.Timestamp("2026-07-13T00:00:00Z")
+    retrieval = issued + pd.Timedelta(minutes=1)
+    delivery = pd.date_range(issued + pd.Timedelta(hours=1), periods=168, freq="h")
+    ercot_frames = {
+        component: pd.DataFrame(
+            {
+                "valid_at": delivery,
+                "issued_at": issued,
+                "baseline_mw": value,
+            }
+        )
+        for component, value in (("load", 60_000.0), ("wind", 10_000.0), ("solar", 5_000.0))
+    }
+    empty_actuals = pd.DataFrame(
+        {"valid_at": pd.Series(dtype="datetime64[ns, UTC]")}
+    )
+
+    with TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+        temp = Path(temp_dir)
+        processed = temp / "processed"
+        run_power_data_pipeline(
+            retrieval,
+            ercot_frames=ercot_frames,
+            eia930_frame=empty_actuals,
+            cache_dir=temp / "cache",
+            processed_dir=processed,
+        )
+        forecast = build_power_forecast(processed_dir=processed)
+
+    assert forecast["forecast_origin"].iloc[0] == retrieval
+    assert forecast["load_baseline_source"].eq("ercot").all()
+    assert forecast["wind_baseline_source"].eq("ercot").all()
+    assert forecast["solar_baseline_source"].eq("ercot").all()

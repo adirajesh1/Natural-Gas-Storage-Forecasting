@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from gas_forecast.modeling.splitters import (
     ExpandingWindowSplitter,
@@ -67,3 +68,14 @@ def test_rolling_window_split_advances_train_and_validation_windows():
     assert splits[0] == ([0, 1, 2, 3], [4])
     assert splits[1] == ([1, 2, 3, 4], [5])
     assert splits[2] == ([2, 3, 4, 5], [6])
+
+
+def test_holdout_split_rejects_overlapping_training_and_validation_dates():
+    splitter = HoldoutSplitter(
+        "date",
+        train_end="2024-02-02",
+        val_start="2024-02-02",
+    )
+
+    with pytest.raises(ValueError, match="must precede"):
+        next(splitter.split(_weekly_frame()))

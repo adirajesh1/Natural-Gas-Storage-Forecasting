@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from collections.abc import Sequence
 
+import numpy as np
 import pandas as pd
 
 
@@ -43,16 +44,24 @@ def build_weekly_crude_balance(raw: pd.DataFrame) -> pd.DataFrame:
     data["value"] = pd.to_numeric(data["value"], errors="coerce")
     if data[["period", "value"]].isna().any().any():
         raise ValueError("Weekly crude data contains invalid dates or values.")
+    if not np.isfinite(data["value"]).all():
+        raise ValueError("Weekly crude data contains non-finite values.")
+    if data["period"].dt.dayofweek.ne(4).any():
+        raise ValueError("Weekly crude data must use Friday week-ending dates.")
     available = set(data["component"])
     absent = sorted(set(RAW_COMPONENTS) - available)
     if absent:
         raise ValueError(f"Weekly crude data missing components: {absent}")
     data = data.loc[data["component"].isin(RAW_COMPONENTS)]
+    if data["value"].lt(0).any():
+        raise ValueError("Weekly crude data contains negative values.")
     if data.duplicated(["period", "component"]).any():
         raise ValueError("Weekly crude data has duplicate period/component rows.")
 
     wide = data.pivot(index="period", columns="component", values="value")
-    wide = wide.dropna(subset=list(RAW_COMPONENTS)).sort_index().reset_index()
+    if wide[list(RAW_COMPONENTS)].isna().any().any():
+        raise ValueError("Weekly crude data has incomplete component rows.")
+    wide = wide.sort_index().reset_index()
     if len(wide) > 1 and not wide["period"].diff().dropna().eq(
         pd.Timedelta(days=7)
     ).all():
@@ -94,14 +103,31 @@ def _validate_balance(frame: pd.DataFrame) -> pd.DataFrame:
     data["date"] = pd.to_datetime(data["date"], errors="coerce")
     if data["date"].isna().any():
         raise ValueError("Crude balance contains invalid dates.")
+    if data["date"].dt.dayofweek.ne(4).any():
+        raise ValueError("Crude balance must use Friday week-ending dates.")
     if data["date"].duplicated().any():
         raise ValueError("Crude balance contains duplicate dates.")
     for column in required - {"date"}:
         converted = pd.to_numeric(data[column], errors="coerce")
         if (converted.isna() & data[column].notna()).any():
             raise ValueError(f"Crude balance contains invalid values in {column}.")
+        if not np.isfinite(converted.dropna()).all():
+            raise ValueError(f"Crude balance contains non-finite values in {column}.")
         data[column] = converted
     data = data.sort_values("date").reset_index(drop=True)
+    initially_nullable = {
+        "commercial_stock_change_mmbbl",
+        "spr_stock_change_mmbbl",
+        "balance_adjustment_mmbbl",
+    }
+    for column in required - {"date"}:
+        missing_values = data[column].isna()
+        if column in initially_nullable:
+            missing_values = missing_values.iloc[1:]
+        if missing_values.any():
+            raise ValueError(f"Crude balance contains missing values in {column}.")
+        if column in NONNEGATIVE_COMPONENTS and data[column].lt(0).any():
+            raise ValueError(f"Crude balance contains negative values in {column}.")
     if len(data) > 1 and not data["date"].diff().dropna().eq(
         pd.Timedelta(days=7)
     ).all():

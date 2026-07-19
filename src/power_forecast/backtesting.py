@@ -14,8 +14,14 @@ def _fallback_predictions(
     history = component_history.dropna(subset=["actual_mw"]).copy()
     history["delivery_hour"] = pd.to_datetime(history["delivery_hour"], utc=True)
     for origin, group in validation.groupby("forecast_origin"):
+        known_mask = (
+            (history["forecast_origin"] < origin)
+            & (history["delivery_hour"] < origin)
+        )
+        if "retrieved_at" in history:
+            known_mask &= pd.to_datetime(history["retrieved_at"], utc=True) <= origin
         known = (
-            history.loc[history["delivery_hour"] < origin]
+            history.loc[known_mask]
             .sort_values(["delivery_hour", "forecast_origin"])
             .drop_duplicates("delivery_hour", keep="last")
         )
@@ -49,7 +55,11 @@ def run_power_backtest(
         component_history = history.loc[history["component"] == component].copy()
         if component_history.empty:
             continue
-        _, selection = fit_predict_correction(component_history, component_history.tail(1))
+        latest_origin = component_history["forecast_origin"].max()
+        latest = component_history.loc[
+            component_history["forecast_origin"] == latest_origin
+        ].head(1)
+        _, selection = fit_predict_correction(component_history, latest)
         validation = selection.validation_predictions.copy()
         if validation.empty:
             continue

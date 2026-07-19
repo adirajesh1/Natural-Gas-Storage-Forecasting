@@ -85,7 +85,7 @@ def save_versioned_parquet(
         dataset_base = dataset_name
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    versioned = output_dir / f"{dataset_base}_{stamp}.parquet"
+    versioned = output_dir / f"{dataset_base}_{stamp}_{uuid.uuid4().hex[:12]}.parquet"
     write_parquet_cache(df, versioned)
     if save_latest:
         write_parquet_cache(df, output_dir / f"{dataset_base}_latest.parquet")
@@ -121,22 +121,27 @@ def compute_date_gaps(
     start_date: str,
     end_date: str,
 ) -> list[tuple[str, str]]:
-    """Return missing prefix/suffix ranges around cached daily coverage."""
+    """Return contiguous missing ranges within requested daily coverage."""
     start = pd.Timestamp(start_date).normalize()
     end = pd.Timestamp(end_date).normalize()
     if start > end:
         raise ValueError(f"start_date {start_date} is after end_date {end_date}.")
     if cached_dates is None or len(cached_dates) == 0:
         return [(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))]
-    cached = pd.Series(pd.to_datetime(cached_dates)).dt.normalize()
+    cached = pd.DatetimeIndex(pd.to_datetime(cached_dates)).normalize().unique()
+    missing = pd.date_range(start, end, freq="D").difference(cached)
+    if missing.empty:
+        return []
+
     gaps: list[tuple[str, str]] = []
-    if start < cached.min():
-        gap_end = min(end, cached.min() - pd.Timedelta(days=1))
-        if start <= gap_end:
-            gaps.append((start.strftime("%Y-%m-%d"), gap_end.strftime("%Y-%m-%d")))
-    if end > cached.max():
-        gap_start = max(start, cached.max() + pd.Timedelta(days=1))
-        if gap_start <= end:
-            gaps.append((gap_start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
+    gap_start = previous = missing[0]
+    for current in missing[1:]:
+        if current != previous + pd.Timedelta(days=1):
+            gaps.append(
+                (gap_start.strftime("%Y-%m-%d"), previous.strftime("%Y-%m-%d"))
+            )
+            gap_start = current
+        previous = current
+    gaps.append((gap_start.strftime("%Y-%m-%d"), previous.strftime("%Y-%m-%d")))
     return gaps
 

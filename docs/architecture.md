@@ -1,263 +1,231 @@
-# Project Architecture
+# Platform Architecture
 
 ## Purpose
 
-This document describes how the Gas Market Platform codebase is organized, where major responsibilities live, and how data moves from external sources into model-ready datasets.
+This repository is a local, file-backed forecasting platform for three energy
+domains:
 
-Update this document when:
+- weekly U.S. natural-gas storage;
+- hourly ERCOT power fundamentals;
+- weekly U.S. crude-oil inventories.
 
-- a major module is added, removed, or renamed;
-- a workflow entry point changes;
-- responsibility moves between modules;
-- a new external data source or generated artifact type is introduced.
+The packages share timing, artifact, evaluation, and interval utilities while
+keeping domain ingestion and physical models separate. There is no database or
+long-running application service. Commands materialize parquet artifacts, and
+the Streamlit dashboard reads those artifacts.
 
-## High-level flow
-
-```text
-External sources
-  EIA weekly storage API
-  Open-Meteo archive API
-  Census state population centroids
-  ERCOT Public Data API and EIA-930
-        |
-        v
-Raw incremental cache
-  datasets/cache/storage/
-  datasets/cache/weather/by_state/
-        |
-        v
-Processed parquet exports
-  datasets/processed/
-        |
-        v
-Model feature table
-  weekly storage + population-weighted weekly weather + engineered lags
-        |
-        v
-Forecast models, evaluation, and plots
-```
-
-The code is packaged under `src/gas_forecast` so notebooks and command-line workflows can share the same implementation.
-
-Domain-neutral artifact, as-of, interval, and hourly backtest infrastructure is
-packaged under `src/energy_forecast`. ERCOT-specific ingestion and the hourly
-physical-stack model are isolated under `src/power_forecast`; gas imports retain
-their compatibility surfaces.
-
-## Repository layout
+## System flow
 
 ```text
-src/gas_forecast/        Reusable package code
-notebooks/               Exploratory and narrative analysis
-datasets/                Local generated data, ignored by git
-plots/                   Generated visual artifacts
-docs/                    Architecture notes and decision records
-dashboard/               Streamlit balance-analysis and forecast UI
-db/                      Reserved for persistent database work
+External APIs and explicit vintage archives
+                |
+                v
+       datasets/cache/                 append-only or incremental raw data
+                |
+                v
+       domain pipeline code            validation, timing, transformation
+                |
+                v
+       datasets/processed/             versioned parquet + latest aliases
+                |
+                v
+       backtests and forecasts         point, interval, and hierarchy outputs
+                |
+                v
+       Streamlit dashboard / analysis
 ```
 
-The `db/` directory is an empty placeholder. Either document its ownership when it gains runtime responsibilities or remove it.
+Generated data under `datasets/` is intentionally ignored by git. Reproducible
+behavior lives in `src/`, tests, configuration, and documentation.
 
-## Package modules
+## Package boundaries
 
-| Module | Responsibility |
+### `energy_forecast`
+
+Domain-neutral infrastructure:
+
+- append-only artifact and vintage handling;
+- exact `issued_at`/`valid_at` as-of selection;
+- chronological split and backtest helpers;
+- common error metrics;
+- conformal interval calibration.
+
+Domain packages may use these primitives but should not put gas-, oil-, or
+power-specific schemas in this package.
+
+### `gas_forecast`
+
+The gas package owns the primary weekly storage product.
+
+| Area | Responsibility |
 | --- | --- |
-| `gas_forecast.cli` | Command-line entry point for data refresh workflows. |
-| `gas_forecast.pipelines.data` | Orchestrates storage, weather, and feature pipelines. |
-| `gas_forecast.pipelines.balance` | Orchestrates the weekly supply-demand balance sheet disaggregation pipeline. |
-| `gas_forecast.pipelines.asof` | Materializes selected weather scenarios and balance lag features from historical vintages. |
-| `gas_forecast.data.weather_scenarios` | Validates and selects the latest regional weather forecast known at an origin. |
-| `gas_forecast.data.balance_api` | EIA monthly state-level data and daily spot price API client and caching. |
-| `gas_forecast.data.balance_asof` | Validates balance vintages and builds point-in-time lag features. |
-| `gas_forecast.data.cache` | Shared parquet cache loading, atomic writing, time-series merging, and date-gap detection. |
-| `gas_forecast.data.paths` | Canonical local paths for cache and processed artifacts. |
-| `gas_forecast.data.regions` | Canonical EIA storage-region definitions, labels, state membership, and filesystem-safe slugs. |
-| `gas_forecast.data.storage` | Compatibility facade that keeps older storage imports working. |
-| `gas_forecast.data.storage_api` | EIA storage API access, pagination, and raw incremental cache refresh. |
-| `gas_forecast.data.storage_transforms` | Storage cleaning, region selection, weekly change calculation, and model-data formatting. |
-| `gas_forecast.data.storage_validation` | Storage dataframe validators. |
-| `gas_forecast.data.weather` | Compatibility facade that keeps older weather imports working. |
-| `gas_forecast.data.weather_api` | Open-Meteo request/response handling and legacy chunk cache paths. |
-| `gas_forecast.data.weather_cache` | Incremental per-state weather cache behavior and legacy cache migration. |
-| `gas_forecast.data.weather_locations` | Census state centroid loading and region-specific location selection. |
-| `gas_forecast.data.weather_features` | HDD/CDD calculation, population-weighted aggregation, and storage-week alignment. |
-| `gas_forecast.data.weather_validation` | Weather/location dataframe validators. |
-| `gas_forecast.data.features` | Joins weekly storage/weather data and builds model-ready calendar, weather, and storage lag features. |
-| `gas_forecast.data.export` | Versioned parquet export with optional latest-file aliases. |
-| `gas_forecast.modeling.forecaster` | Recursive storage-state simulation with seasonal, archived-scenario, or observed input modes. |
-| `gas_forecast.modeling.backtesting` | One-step and recursive chronological backtest runners with optional conformal intervals. |
-| `gas_forecast.modeling.splitters` | Chronological data splitters (Holdout, Expanding Window, Rolling Window) for validation. |
-| `gas_forecast.modeling.config` | Central configuration factories, feature subsets, and default estimators. |
-| `gas_forecast.modeling.intervals` | Conformal interval calibration and empirical coverage diagnostics. |
-| `gas_forecast.modeling.evaluation` | Core evaluation functions (e.g. `evaluate_forecast`) and metrics (MAE, RMSE, Bias). |
-| `gas_forecast.modeling.interpret` | Feature importance diagnostics using permutation importance metrics. |
-| `gas_forecast.modeling.models` | Legacy seasonal models, a shared fit-history selector, and balance disaggregation components. |
-| `gas_forecast.llm.explain` | Gemini-based weekly market report generator and narrative commentator. |
-| `gas_forecast.plotting` | Standard Plotly forecast visualizations. |
-| `energy_forecast` | Shared append-only vintages, as-of selection, exact-timestamp rolling origins, metrics, and conformal intervals. |
-| `power_forecast.data` | ERCOT Public API, EIA-930, and archived weather adapters with canonical UTC schemas. |
-| `power_forecast.pipelines` | Materializes public-data vintages and builds the 168-hour ERCOT physical stack. |
-| `power_forecast.models` | Leakage-safe load, wind, and solar residual correction and promotion gating. |
+| `data/regions.py` | Canonical R48 and R31-R35 geography, labels, and state membership. |
+| `data/storage_*` | EIA weekly storage ingestion, cleaning, changes, and validation. |
+| `data/weather_*` | Realized weather, forecast vintages, regional weighting, HDD/CDD, and storage-week alignment. |
+| `data/features.py` | Leakage-safe calendar, weather, inventory, lag, and rolling features. |
+| `data/balance_*` | Retrospective physical gas balance and explicit point-in-time balance vintages. |
+| `pipelines/data.py` | Realized storage/weather/feature materialization. |
+| `pipelines/asof.py` | Live GEFS, historical fixed-lead GFS, and as-of balance materialization. |
+| `pipelines/modeling.py` | Six-region backtests and saved hierarchy outputs. |
+| `modeling/` | Estimator configuration, recursive forecasting, backtests, reconciliation, intervals, and promotion tests. |
+| `llm/explain.py` | Optional narrative generation over already-computed results. |
+
+Compatibility modules such as `data/weather.py` and `data/storage.py` re-export
+focused modules for older consumers. New code should import the focused module
+that owns the behavior.
+
+### `power_forecast`
+
+The power package owns public ERCOT/EIA-930 ingestion, archived hourly
+vintages, residual correction, the 168-hour physical supply stack, and implied
+gas-burn scenarios. Its canonical timestamps are UTC. See
+[`power_fundamentals.md`](power_fundamentals.md).
+
+### `oil_forecast`
+
+The oil package owns EIA weekly crude components, physical balance forecasts,
+inventory-change backtests, and its CLI workflow. See
+[`oil_fundamentals.md`](oil_fundamentals.md).
+
+## Gas data paths
+
+### Realized-history path
+
+```text
+EIA weekly storage ----------------------+
+                                         |
+Open-Meteo realized state weather        +--> weekly feature table
+  -> regional weights                    |       -> model fitting/backtests
+  -> HDD/CDD                              |
+  -> Saturday-Friday aggregation --------+
+```
+
+The canonical artifact for a region is:
+
+```text
+datasets/processed/{region_slug}_weekly_model_features_latest.parquet
+```
+
+Every artifact is validated against its requested `duoarea`. This prevents a
+stale region file—for example, Pacific data labeled Mountain—from entering a
+hierarchical run.
+
+### Forecast-weather path
+
+```text
+Open-Meteo live GEFS or historical GFS fixed leads
+  -> member/state daily archive
+  -> population or point-in-time gas-load weighting
+  -> regional member archive
+  -> complete EIA-week ensemble summaries
+  -> as-of scenario selection
+```
+
+Member archives retain provider, model, run, member, issue time, valid period,
+state, region, temperature, HDD, CDD, and coverage. Weekly scenarios retain
+ensemble means, P10, P90, spread, and member count.
+
+Historical fixed-lead GFS data supports honest week-one replay from 2021.
+Longer historical ensemble horizons require a separately retained GEFS archive
+or a prepared NOAA reforecast dataset; the system does not manufacture ensemble
+dispersion from deterministic history.
+
+### Physical-balance path
+
+Monthly state fundamentals are downscaled to weekly regional estimates for
+production, sector consumption, fuel use, prices, and local balance. This is an
+analytical context product. It is excluded from the default storage model unless
+the caller supplies real historical vintages with availability timestamps.
+
+## Modeling and hierarchy flow
+
+```text
+R48 feature table ----------------------> direct R48 base forecast
+R31-R35 feature tables -----------------> five regional base forecasts
+                                               |
+                     +-------------------------+--------------------+
+                     |                         |                    |
+                  direct R48               bottom-up          MinT-shrink
+                                                                      |
+                                               coherent published outputs
+```
+
+All six series use the same estimator, feature contract, splitter, horizon, and
+weather input mode in a hierarchy experiment. Reconciliation only uses origins
+where all six forecasts exist. MinT covariance uses residuals whose target dates
+are earlier than the current origin.
 
 ## Entry points
 
-### CLI
-
-The installable script is defined in `pyproject.toml`:
+Installed commands:
 
 ```text
-gas-data = gas_forecast.cli:main
+gas-data    gas storage, weather, balance, and hierarchy workflows
+power-data  ERCOT power workflows
+oil-data    crude-oil workflows
 ```
 
-Current command:
+Important gas commands:
 
-```text
+```bash
 gas-data refresh --region R48
 gas-data refresh --all-regions
-gas-data weather-scenario --region R48 --scenarios-path weather_vintages.parquet --as-of 2025-01-03T00:00:00Z
-gas-data balance-asof --region R48 --vintages-path balance_vintages.parquet
-power-data refresh
-power-data forecast --horizon-hours 168
-power-data backtest
+gas-data weather-forecast --region R48 --issued-at 2026-07-18T00:00:00Z
+gas-data weather-forecast --region R48 --start-date 2021-03-23 --end-date 2026-01-01
+gas-data regional-backtest --model ridge --weather-input seasonal
+gas-data regional-backtest --model ridge --weather-input scenario --weather-scenarios-path weather.parquet
 ```
 
-Optional flags control stage selection, cache directories, processed output directories, storage revision windows, Open-Meteo request pacing, and legacy weather-cache migration.
+The dashboard is launched with:
 
-### Python API
+```bash
+python -m streamlit run dashboard/Gas_Fundamentals.py
+```
 
-The main callable workflows live in `gas_forecast.pipelines.data` and `gas_forecast.pipelines.balance`:
+## Artifact conventions
 
-| Function | Purpose |
-| --- | --- |
-| `run_storage_pipeline` | Download/cache EIA storage, clean one region, calculate weekly change, export processed storage. |
-| `run_weather_pipeline` | Load storage date range, download/cache state weather, aggregate daily and weekly weather, export processed weather. |
-| `run_features_pipeline` | Join storage and weekly weather, build engineered model features, export feature table. |
-| `run_data_pipeline` | Run one or more stages for one region. |
-| `run_all_regions` | Run the selected stages for every supported region. |
-| `run_balance_pipeline` | Model and save weekly supply-demand balance sheet for a region. |
-
-### Notebooks
-
-Notebooks are best treated as analysis consumers of package code. They can call lower-level functions while exploring, but stable workflows should eventually call the pipeline functions so notebook behavior does not drift from CLI behavior.
-
-## Data artifacts
-
-### Raw incremental cache
+Processed outputs use timestamped immutable files and a replaceable latest
+alias:
 
 ```text
-datasets/cache/
-  storage/
-    weekly_storage_raw.parquet
-  weather/
-    by_state/
-      Alabama.parquet
-      ...
+{name}_{UTC timestamp}_{content hash}.parquet
+{name}_latest.parquet
 ```
 
-Storage cache behavior:
+Forecast outputs identify their origin and information set with fields such as
+`forecast_origin`, `region`, `horizon`, `model_key`, `weather_provider`,
+`weather_model`, `weather_run`, and `reconciliation_method`.
 
-- first run backfills available history;
-- later runs re-fetch a configurable recent tail window to capture EIA revisions;
-- cache rows are merged and deduplicated by region, period, and series.
+## Timing invariants
 
-Weather cache behavior:
+- Training dates must precede validation dates.
+- Forecast vintages must have `issued_at <= forecast_origin`.
+- Recursive scenario forecasts require every target week; they never fall back
+  silently to realized weather.
+- Realized future weather is allowed only in the explicitly named `observed`
+  oracle mode.
+- Balance features require actual `available_at` vintages.
+- MinT covariance and conformal intervals use earlier out-of-fold errors only.
+- Bottom-up and MinT point and available quantile outputs sum exactly to R48.
 
-- one parquet file per state;
-- requested ranges are compared against cached date coverage;
-- only missing prefix/suffix gaps are fetched;
-- large gaps are split into API-friendly request periods.
+## Testing strategy
 
-### Processed exports
+The test suite covers API parsing, date alignment, region invariants, feature
+timing, recursive state transitions, as-of selection, interval calibration,
+hierarchy coherence, promotion gates, and full domain pipelines.
 
-Processed files are written to `datasets/processed` with timestamped names and latest aliases:
+Run it with an explicit writable temporary directory on restricted Windows
+environments:
 
-```text
-{region_slug}_{dataset}_{timestamp}.parquet
-{region_slug}_{dataset}_latest.parquet
+```bash
+python -m pytest --basetemp datasets/cache/pytest-run
 ```
 
-Examples:
+## Design rules
 
-```text
-lower48_weekly_storage_latest.parquet
-lower48_weekly_weather_latest.parquet
-lower48_weekly_model_features_latest.parquet
-```
-
-Use `weekly_model_features` as the canonical feature-table dataset name. Older `weekly_features` files may exist from previous iterations and should be treated as legacy artifacts.
-
-## Modeling architecture
-
-The original forecast model classes implement `WeeklyChangeForecastModel`:
-
-```text
-fit(storage) -> model
-predict(evaluation) -> predictions
-```
-
-Current implementations:
-
-- `FiveYearWeeklyAverageModel`
-- `WeeklyChangeLinearRegressionModel`
-- `WeeklyChangeFourierRegressionModel`
-- `WeeklyChangeSARIMAModel`
-
-`evaluate_forecast` selects the requested evaluation year, fits the model using
-only earlier years, and attaches predictions, deviations, and optional
-band/outside-band diagnostics.
-
-The newer `gas_forecast.modeling` package is the preferred path for sklearn-style experiments. It expects prebuilt feature rows, uses splitter objects for holdout or rolling backtests, clones and fits any sklearn-compatible estimator per fold, and returns prediction/metric tables that notebooks can graph.
-
-Shared model choices live in `gas_forecast.modeling.config`. Use this module for reusable model factories, default feature columns, target column names, Fourier harmonic grids, and default sklearn estimators instead of hard-coding model definitions in notebooks. The feature table includes calendar cycles, weather lags/rolling averages, storage lags/rolling averages, storage surplus/deficit measures, and season flags.
-
-`run_recursive_backtest` defaults to seasonal target-week inputs calculated
-from historical rows before each origin. It can instead select archived weather
-scenarios by `issued_at`; its observed-input mode is an oracle diagnostic. Both
-backtest runners can add conformal intervals calibrated on earlier out-of-fold
-errors. See `docs/modeling_assumptions.md` for the full timing contract.
-
-## Testing
-
-The test suite lives under `tests/` and is configured in `pyproject.toml`.
-
-Current test focus:
-
-- cache date-gap detection;
-- storage-week Friday alignment;
-- incomplete weather-week dropping;
-- grouped storage change calculation;
-- feature lags that do not leak across regions;
-- strict evaluation-year holdouts and model fit-history handling.
-- recursive seasonal-input behavior and unsupported-feature rejection.
-- weather-scenario version selection and point-in-time balance revisions.
-- conformal interval calibration and coverage metrics.
-- canonical EIA region labels and alias handling.
-- modeling splitters and sklearn-style backtest behavior.
-
-Run tests with:
-
-```text
-python -m pytest
-```
-
-Install test dependencies with:
-
-```text
-python -m pip install -e ".[dev]"
-```
-
-## Design conventions
-
-- Keep reusable behavior in `src/gas_forecast`, not notebooks.
-- Keep generated parquet artifacts out of git.
-- Validate data at workflow boundaries.
-- Group time-series operations by `duoarea` when multiple regions may be present.
-- Treat EIA storage week dates as Friday week-ending dates.
-- Prefer pipeline functions for repeatable refreshes.
-- Record non-obvious design choices in `docs/decisions.md`.
-
-## Known improvement areas
-
-- Notebook orchestration should keep moving toward pipeline calls.
-- Collect and retain a real archived weather-forecast feed for operational scenarios.
-- Collect source balance vintages with publication timestamps before promoting balance lags into a default model.
+- Put stable behavior in packages, not notebooks or dashboard callbacks.
+- Preserve raw vintages; select the information set at read time.
+- Validate schemas and geography at pipeline boundaries.
+- Prefer explicit small functions over generic workflow frameworks.
+- Keep optional heavy models outside base dependencies.
+- Do not promote a more complex model without paired operational evidence.

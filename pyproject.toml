@@ -27,6 +27,10 @@ oil-data = "oil_forecast.cli:main"
 dev = [
     "pytest",
 ]
+neural = [
+    "neuralforecast",
+    "torch",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

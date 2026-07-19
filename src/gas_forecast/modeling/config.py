@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import (
+    HistGradientBoostingRegressor,
+    RandomForestRegressor,
+    VotingRegressor,
+)
 from sklearn.linear_model import ElasticNet, LinearRegression, Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -11,6 +15,7 @@ from sklearn.preprocessing import StandardScaler
 from gas_forecast.data.features import DEFAULT_WEATHER_MODEL_FEATURES, TARGET_COLUMN
 from gas_forecast.modeling.models import (
     FiveYearWeeklyAverageModel,
+    ARIMAXRegressor,
     WeeklyChangeForecastModel,
     WeeklyChangeFourierRegressionModel,
     WeeklyChangeLinearRegressionModel,
@@ -147,6 +152,32 @@ SKLEARN_MODEL_CONFIGS: tuple[SklearnModelConfig, ...] = (
             random_state=42,
         ),
     ),
+    SklearnModelConfig(
+        key="linear_hgb_ensemble",
+        label="Linear + HistGradientBoosting",
+        factory=lambda: VotingRegressor(
+            estimators=[
+                ("linear", LinearRegression()),
+                (
+                    "hgb",
+                    HistGradientBoostingRegressor(
+                        learning_rate=0.05,
+                        max_iter=300,
+                        l2_regularization=0.1,
+                        random_state=42,
+                    ),
+                ),
+            ]
+        ),
+    ),
+)
+
+ONE_STEP_ONLY_MODEL_CONFIGS: tuple[SklearnModelConfig, ...] = (
+    SklearnModelConfig(
+        key="arimax",
+        label="ARIMAX (one-step)",
+        factory=ARIMAXRegressor,
+    ),
 )
 
 
@@ -208,6 +239,11 @@ def sklearn_model_configs() -> tuple[SklearnModelConfig, ...]:
         pass
 
     return tuple(configs)
+
+
+def one_step_model_configs() -> tuple[SklearnModelConfig, ...]:
+    """Return the full one-step ladder, including non-recursive ARIMAX."""
+    return (*sklearn_model_configs(), *ONE_STEP_ONLY_MODEL_CONFIGS)
 
 
 def build_fourier_model(n_harmonics: int) -> WeeklyChangeFourierRegressionModel:

@@ -63,6 +63,13 @@ class HoldoutSplitter:
         if val_end is None:
             val_end = dates.max()
 
+        if train_start > train_end:
+            raise ValueError("train_start must not be after train_end.")
+        if val_start > val_end:
+            raise ValueError("val_start must not be after val_end.")
+        if train_end >= val_start:
+            raise ValueError("Training dates must precede validation dates.")
+
         train_mask = (dates >= train_start) & (dates <= train_end)
         val_mask = (dates >= val_start) & (dates <= val_end)
         train_idx = _positions(train_mask)

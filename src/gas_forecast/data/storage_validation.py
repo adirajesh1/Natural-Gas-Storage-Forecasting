@@ -39,3 +39,7 @@ def validate_storage_region(df: pd.DataFrame) -> None:
 
         if not group["period"].is_monotonic_increasing:
             raise ValueError("Selected region is not sorted by period.")
+
+        period_gaps = group["period"].diff().dropna()
+        if not period_gaps.eq(pd.Timedelta(weeks=1)).all():
+            raise ValueError("Selected region does not have consecutive weekly periods.")

@@ -78,6 +78,11 @@ def _gas_generation_forecast(
     gas_price: float,
 ) -> tuple[np.ndarray, str]:
     history = actual_history.copy()
+    if "valid_at" in history and "forecast_origin" in stack:
+        origin = pd.to_datetime(stack["forecast_origin"], utc=True).min()
+        valid_at = pd.to_datetime(history["valid_at"], utc=True)
+        history = history.loc[valid_at < origin].copy()
+        history = history.sort_values("valid_at")
     required = {
         "gas_generation_actual_mw",
         "coal_generation_actual_mw",

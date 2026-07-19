@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from energy_forecast.artifacts import append_vintage_parquet
+from energy_forecast.artifacts import save_versioned_parquet
 from energy_forecast.asof import select_as_of
 from energy_forecast.intervals import add_horizon_conformal_intervals
 from energy_forecast.splitters import RollingOriginSplitter
@@ -77,6 +78,22 @@ def test_append_vintages_never_overwrites_prior_part():
         second = append_vintage_parquet(frame, temp_dir)
         assert first != second
         assert len(list(Path(temp_dir).glob("*.parquet"))) == 2
+
+
+def test_versioned_artifacts_never_overwrite_same_second(monkeypatch):
+    class FixedDatetime:
+        @classmethod
+        def now(cls, _timezone):
+            return pd.Timestamp("2026-01-01T00:00:00Z").to_pydatetime()
+
+    monkeypatch.setattr("energy_forecast.artifacts.datetime", FixedDatetime)
+    frame = pd.DataFrame({"value": [1.0]})
+    with TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+        first = save_versioned_parquet(frame, temp_dir, "example", save_latest=False)
+        second = save_versioned_parquet(frame, temp_dir, "example", save_latest=False)
+
+        assert first != second
+        assert len(list(Path(temp_dir).glob("example_*.parquet"))) == 2
 
 
 def test_conformal_intervals_do_not_use_same_origin_residuals():

@@ -8,6 +8,7 @@ from gas_forecast.modeling.config import (
     FOURIER_HARMONIC_GRID,
     build_fourier_model,
     legacy_forecast_model_configs,
+    one_step_model_configs,
     sklearn_model_configs,
 )
 from gas_forecast.modeling.models import (
@@ -48,6 +49,7 @@ def test_sklearn_model_configs_build_cloneable_estimators():
         "hist_gradient_boosting",
         "hist_gradient_boosting_p10",
         "hist_gradient_boosting_p90",
+        "linear_hgb_ensemble",
     }.issubset(keys)
 
     for config in configs:
@@ -55,6 +57,11 @@ def test_sklearn_model_configs_build_cloneable_estimators():
         clone(estimator)
         assert hasattr(estimator, "fit")
         assert hasattr(estimator, "predict")
+
+
+def test_arimax_is_only_in_the_one_step_model_ladder():
+    assert "arimax" not in {config.key for config in sklearn_model_configs()}
+    assert "arimax" in {config.key for config in one_step_model_configs()}
 
 
 def test_default_feature_and_target_config_are_nonempty():

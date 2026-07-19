@@ -109,10 +109,13 @@ def _rolling_predictions(
     initial = max(2, int(np.ceil(len(origins) * 0.60)))
     outputs: list[pd.DataFrame] = []
     for origin in origins[initial:]:
-        train = history.loc[
+        train_mask = (
             (history["forecast_origin"] < origin)
             & (history["delivery_hour"] < origin)
-        ].dropna(
+        )
+        if "retrieved_at" in history:
+            train_mask &= pd.to_datetime(history["retrieved_at"], utc=True) <= origin
+        train = history.loc[train_mask].dropna(
             subset=["actual_mw", "baseline_mw"]
         )
         validation = history.loc[history["forecast_origin"] == origin].dropna(
@@ -158,6 +161,10 @@ def fit_predict_correction(
         (historical["forecast_origin"] < forecast_cutoff)
         & (historical["delivery_hour"] < forecast_cutoff)
     ].dropna(subset=["actual_mw", "baseline_mw"])
+    if "retrieved_at" in clean_history:
+        clean_history = clean_history.loc[
+            pd.to_datetime(clean_history["retrieved_at"], utc=True) <= forecast_cutoff
+        ]
     origins = pd.DatetimeIndex(sorted(clean_history["forecast_origin"].unique()))
     baseline_validation = pd.DataFrame()
     if len(origins) >= 4:

@@ -37,21 +37,35 @@ NATIONAL_BASELINE_SERIES = (
 )
 
 
-def _monthly_cache_is_usable(df: pd.DataFrame) -> bool:
+def _monthly_cache_is_usable(
+    df: pd.DataFrame,
+    states: list[str] | None = None,
+) -> bool:
     """Return whether cached monthly data has the inputs required by the model."""
     if df.empty or not {"period", "series", "value"}.issubset(df.columns):
         return False
 
     available = set(df["series"].dropna().astype(str))
     has_national_baselines = set(NATIONAL_BASELINE_SERIES).issubset(available)
-    has_state_consumption = any(
-        series.startswith(("N3010", "N3020", "N3035", "N3045"))
-        for series in available
-    )
+    if states is None:
+        has_state_consumption = any(
+            series.startswith(("N3010", "N3020", "N3035", "N3045"))
+            for series in available
+        )
+    else:
+        state_abbrs = [
+            STATE_TO_ABBR[state] for state in states if state in STATE_TO_ABBR
+        ]
+        required_consumption = {
+            f"{prefix}{abbr}2"
+            for abbr in state_abbrs
+            for prefix in ("N3010", "N3020", "N3035", "N3045")
+        }
+        has_state_consumption = required_consumption.issubset(available)
     has_state_production = any(
         series.startswith("N9050") and series != "N9050US2"
         for series in available
-    )
+    ) or any(series.startswith("NA1160_S") for series in available)
     return has_national_baselines and has_state_consumption and has_state_production
 
 def fetch_eia_api_paginated(
@@ -202,7 +216,7 @@ def get_monthly_state_data(
     
     if not force_refresh and cache_path.exists():
         cached = load_parquet_cache(cache_path)
-        if _monthly_cache_is_usable(cached):
+        if _monthly_cache_is_usable(cached, sorted_states):
             return cached
         print(f"Cached monthly balance data is incomplete; refreshing {cache_path.name}...")
 
@@ -211,12 +225,14 @@ def get_monthly_state_data(
         # Convert period column to datetime
         df["period"] = pd.to_datetime(df["period"] + "-01")
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        if not _monthly_cache_is_usable(df):
+        if not _monthly_cache_is_usable(df, sorted_states):
             available = set(df["series"].dropna().astype(str))
             missing_national = sorted(set(NATIONAL_BASELINE_SERIES) - available)
             raise ValueError(
                 "EIA monthly response is missing required balance series. "
-                f"Missing national baselines: {missing_national}"
+                f"Missing national baselines: {missing_national}. "
+                "One or more requested state consumption or production series "
+                "are also unavailable."
             )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         write_parquet_cache(df, cache_path)

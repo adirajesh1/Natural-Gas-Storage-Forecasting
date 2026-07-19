@@ -27,13 +27,14 @@ Weekly storage changes are a useful gas-market signal because they reflect seaso
 ## What This Project Does
 
 1. Pulls weekly storage data from the EIA API.
-2. Pulls historical daily weather from Open-Meteo.
-3. Aggregates state weather into EIA storage regions using population weights.
+2. Pulls historical daily weather and archives point-in-time GFS/GEFS forecasts.
+3. Aggregates state weather into EIA storage regions using population or lagged gas-load weights.
 4. Aligns weather to EIA Friday storage weeks.
 5. Builds model-ready weekly features.
 6. Backtests multiple forecasting models with time-aware splits.
 7. Selects archived weather scenarios and balance vintages at a forecast origin.
-8. Produces point metrics, calibrated intervals, coverage diagnostics, and forecast-error plots.
+8. Reconciles the five EIA regions with Lower 48 using bottom-up and MinT-shrink paths.
+9. Produces point metrics, calibrated intervals, coverage diagnostics, and forecast-error plots.
 
 ## Architecture
 
@@ -85,8 +86,9 @@ It combines weekly storage, weekly weather, and engineered features such as:
 
 ## Modeling Approach
 
-The data-availability contract for forecasts and backtests is documented in
-[`docs/modeling_assumptions.md`](docs/modeling_assumptions.md).
+The current architecture and model contracts are documented in
+[`docs/architecture.md`](docs/architecture.md) and
+[`docs/models.md`](docs/models.md).
 
 - `gas_forecast.modeling`: the unified modeling package containing concrete model implementations, splitters, backtest runners, evaluation metrics, and configuration grids.
 
@@ -105,6 +107,12 @@ Current configured models include:
 - Random Forest
 - HistGradientBoosting
 - Quantile HistGradientBoosting variants for P10/P90 forecast ranges
+- A prior-fold Linear + HistGradientBoosting ensemble
+- ARIMAX for one-step challenges only
+
+An optional pooled N-HiTS challenger is available through `.[neural]`. It uses
+all six storage series, a 104-week input window, four-week output, known-future
+ensemble weather, and P10/P50/P90 loss. It is not part of the production default.
 
 ## Backtesting
 
@@ -133,7 +141,13 @@ reported as an operational forecast result.
 Use `forecast_input_mode="scenario"` with a versioned weekly weather archive to
 replay the actual forecast information set. Each archive row needs `date`,
 `duoarea`, `issued_at`, `temperature_f`, `hdd`, `cdd`, and `weather_days`.
-Only the latest version with `issued_at <= forecast origin` is used.
+Only the latest version with `issued_at <= forecast origin` is used. Recursive
+backtests use the final training date as the origin, never the first target date.
+
+`run_hierarchical_recursive_backtest` fits the same base estimator independently
+for R48 and R31-R35, then evaluates direct R48, bottom-up, and rolling-origin
+MinT-shrink forecasts. MinT covariance uses only errors whose target dates are
+earlier than the current origin.
 
 Pass `interval_coverage=0.80` to either backtest runner to attach symmetric
 conformal intervals. They are calibrated from earlier out-of-fold residuals
@@ -198,6 +212,31 @@ Build point-in-time balance features from a genuine historical vintage archive:
 gas-data balance-asof --region R48 --vintages-path balance_vintages.parquet
 ```
 
+Archive a live free NOAA GEFS ensemble through Open-Meteo:
+
+```bash
+gas-data weather-forecast --region R48 --issued-at 2026-07-18T00:00:00Z
+```
+
+Build fixed-lead historical GFS runs for honest week-one tests:
+
+```bash
+gas-data weather-forecast --region R48 --start-date 2021-03-23 --end-date 2026-01-01
+```
+
+Run the six-region hierarchy challenge from the 2021 validation period:
+
+```bash
+gas-data regional-backtest --model hist_gradient_boosting --weather-input seasonal
+gas-data regional-backtest --model ridge --weather-input scenario --weather-scenarios-path weather_scenarios.parquet
+```
+
+Install the optional pooled neural challenger only when testing it:
+
+```bash
+python -m pip install -e ".[neural]"
+```
+
 The balance archive must include `date`, `duoarea`, `available_at`,
 `local_balance`, and `net_inflow_balancing`. It is intentionally separate from
 the retrospective output of `gas-data balance`.
@@ -246,8 +285,9 @@ not automatically improve error.
 
 ## Limitations
 
-- The core weather pipeline still downloads realized historical weather. Live
-  weather scenarios require a separately collected, versioned provider archive.
+- Open-Meteo retains historical deterministic GFS fixed leads much longer than
+  individual GEFS members. Historical ensemble uncertainty therefore requires
+  a separately retained live archive or a prepared NOAA reforecast dataset.
 - The current project forecasts weekly storage changes, not natural gas prices.
 - The balance disaggregation output remains retrospective. The as-of pipeline
   is usable only when source vintages retain real `available_at` timestamps.

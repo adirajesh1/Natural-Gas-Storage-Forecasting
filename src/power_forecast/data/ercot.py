@@ -54,9 +54,13 @@ def _utc(value: object) -> pd.Timestamp:
 
 def _ercot_datetime_series(values: pd.Series) -> pd.Series:
     """Parse API datetimes, whose offset-free values are ERCOT local time."""
-    parsed = pd.to_datetime(values, errors="coerce")
+    timestamps = values.map(pd.Timestamp)
+    aware = timestamps.map(lambda value: value is not pd.NaT and value.tzinfo is not None)
+    if aware.any() and not aware.all():
+        raise ValueError("ERCOT timestamps cannot mix offset-aware and offset-free values.")
+    parsed = pd.to_datetime(values, errors="coerce", utc=bool(aware.all()))
     if parsed.isna().any():
-        raise ValueError("ERCOT data contains invalid publication timestamps.")
+        raise ValueError("ERCOT data contains invalid timestamps.")
     if parsed.dt.tz is None:
         parsed = parsed.dt.tz_localize(
             "America/Chicago",
@@ -95,12 +99,7 @@ def _valid_times(frame: pd.DataFrame) -> pd.Series:
         required=False,
     )
     if timestamp_col:
-        values = pd.to_datetime(frame[timestamp_col], errors="coerce")
-        if values.dt.tz is None:
-            values = values.dt.tz_localize(
-                "America/Chicago", ambiguous="infer", nonexistent="shift_forward"
-            )
-        return values.dt.tz_convert("UTC")
+        return _ercot_datetime_series(frame[timestamp_col])
     day_col = find_column(
         frame,
         ["delivery_date", "deliverydate", "operating_date", "operating_day", "operatingday", "date"],
@@ -249,9 +248,13 @@ def _normalize_capacity_product(
     result["product_id"] = product_id.upper()
     result["geography"] = ERCOT_GEOGRAPHY
     result["source_hash"] = frame_hash(frame)
+    found_value = False
     for output, aliases in value_aliases.items():
         column = find_column(data, aliases, required=False)
+        found_value = found_value or column is not None
         result[output] = pd.to_numeric(data[column], errors="coerce") if column else 0.0
+    if not found_value:
+        raise ValueError(f"ERCOT product {product_id} has no recognized capacity values.")
     result = validate_vintage_frame(result)
     keys = ["product_id", "issued_at", "valid_at"]
     if result.duplicated(keys).any():

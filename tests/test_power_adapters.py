@@ -163,6 +163,31 @@ def test_offset_free_posted_datetime_is_interpreted_as_ercot_local_time():
     assert result.loc[0, "issued_at"] == pd.Timestamp("2026-07-14T03:00:00Z")
 
 
+def test_mixed_dst_offsets_in_posted_datetimes_are_normalized_to_utc():
+    frame = pd.DataFrame(
+        {
+            "valid_at": ["2026-11-01T08:00:00Z", "2026-11-01T09:00:00Z"],
+            "postedDatetime": [
+                "2026-11-01T01:30:00-05:00",
+                "2026-11-01T01:30:00-06:00",
+            ],
+            "systemTotal": [50_000.0, 49_000.0],
+        }
+    )
+
+    result = normalize_component_product(
+        frame,
+        component="load",
+        product_id="NP3-560-CD",
+        retrieved_at="2026-11-01T08:00:00Z",
+    )
+
+    assert result["issued_at"].tolist() == [
+        pd.Timestamp("2026-11-01T06:30:00Z"),
+        pd.Timestamp("2026-11-01T07:30:00Z"),
+    ]
+
+
 def test_regional_rows_are_summed_when_product_has_no_system_total():
     frame = pd.DataFrame(
         {
@@ -204,6 +229,19 @@ def test_actual_outage_and_adequacy_parsers_emit_canonical_values():
     assert adequacy.loc[0, "available_capacity_mw"] == pytest.approx(90_000.0)
 
 
+def test_capacity_parser_rejects_unrecognized_value_schema():
+    frame = pd.DataFrame(
+        {
+            "valid_at": ["2026-07-13T01:00:00Z"],
+            "issued_at": ["2026-07-13T00:00:00Z"],
+            "renamedCapacityField": [90_000.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="no recognized capacity values"):
+        normalize_adequacy(frame, retrieved_at="2026-07-13T00:01:00Z")
+
+
 def test_live_outage_schema_sums_zone_columns():
     frame = pd.DataFrame(
         {
@@ -239,10 +277,28 @@ def test_eia930_long_fuel_rows_are_pivoted():
     assert result.loc[0, "nuclear_actual_mw"] == pytest.approx(5_000.0)
 
 
+def test_eia930_total_interchange_is_converted_to_net_imports():
+    frame = pd.DataFrame(
+        {
+            "period": ["2026-07-13T01:00:00Z"],
+            "respondent": ["ERCO"],
+            "type-name": ["Total interchange"],
+            "value": [1_250.0],
+        }
+    )
+
+    result = normalize_eia930(frame)
+
+    assert result.loc[0, "net_imports_actual_mw"] == pytest.approx(-1_250.0)
+
+
 def test_explicit_utc_hours_survive_dst_fall_back_as_unique_rows():
     frame = pd.DataFrame(
         {
-            "valid_at": ["2026-11-01T06:00:00Z", "2026-11-01T07:00:00Z"],
+            "valid_at": [
+                "2026-11-01T01:00:00-05:00",
+                "2026-11-01T01:00:00-06:00",
+            ],
             "issued_at": ["2026-10-31T12:00:00Z"] * 2,
             "baseline_mw": [50_000.0, 49_000.0],
         }
